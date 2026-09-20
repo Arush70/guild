@@ -28,19 +28,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.5"]
+ui = ["fastapi>=0.110", "uvicorn>=0.29"]
+dev = ["pytest>=8", "ruff>=0.5", "fastapi>=0.110", "uvicorn>=0.29", "httpx>=0.27"]
 
 [project.scripts]
 guild = "guild.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/Arush70/guild"
+Homepage = "https://github.com/arushkv/guild"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-guild = ["data/roles/*.yaml", "data/profiles/*.yaml", "data/*.md"]
+guild = ["data/roles/*.yaml", "data/profiles/*.yaml", "data/*.md", "ui/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
