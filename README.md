@@ -29,6 +29,8 @@ you ──goal──▶ Lead ──tasks──▶ Engineer ──branch──▶
 
 MIT licensed. Python 3.10+.
 
+![guild dashboard](docs/screenshot.png)
+
 ## Quick start
 
 ```bash
@@ -76,6 +78,19 @@ export ANTHROPIC_API_KEY=... OPENAI_API_KEY=... GEMINI_API_KEY=...
 guild init . --profile pro
 ```
 
+## Dashboard
+
+```bash
+pip install "guild-ai[ui]"      # adds fastapi + uvicorn
+cd your-project && guild ui     # opens http://127.0.0.1:7331
+```
+
+Everything the CLI does, in a browser tab: type a goal and press **plan**, edit or reorder
+tasks, press **run**, and watch each agent light up as it works — every model call, tool call,
+test result and review decision streams in live. The **doctor** panel shows which models are
+ready; **runs & cost** shows what each run consumed. It binds to localhost only and runs in
+the same process as the CLI, so there's nothing to deploy.
+
 ## Commands
 
 | command | what it does |
@@ -89,6 +104,7 @@ guild init . --profile pro
 | `guild ask ROLE "question"` | ask one role (e.g. `researcher`, `security`) about the project |
 | `guild cost` | token + estimated cost table from saved traces |
 | `guild roles` | list roles and profiles (built-in + project overrides) |
+| `guild ui [--port 7331]` | local web dashboard |
 
 `-p PROFILE` overrides the profile for one command. `-C DIR` runs against another project.
 
@@ -184,7 +200,7 @@ This is still an LLM writing code: read the diff before you merge.
 ## Development
 
 ```bash
-git clone https://github.com/Arush70/guild && cd guild
+git clone https://github.com/<you>/guild && cd guild
 pip install -e ".[dev]"
 pytest              # 16 tests, no API needed (scripted fake provider)
 ```
@@ -194,6 +210,8 @@ Layout:
 ```
 src/guild/
   cli.py            typer commands
+  ui/server.py      FastAPI dashboard (guild ui) + SSE event hub
+  ui/index.html     the dashboard page (no build step)
   workflow.py       Guild: plan / run_task / ask
   agent.py          one role's tool-calling loop
   config.py         Profile / Role / ProjectConfig loading
@@ -211,7 +229,7 @@ src/guild/
 - [ ] parallel engineers on independent tasks
 - [ ] streaming output
 - [ ] VS Code extension
-- [ ] trace viewer (`guild trace <run>`)
+- [ ] trace viewer inside the dashboard
 - [ ] more built-in roles (performance, ux, data-quality)
 
 ## License

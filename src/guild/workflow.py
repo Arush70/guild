@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -174,8 +175,11 @@ class Guild:
         return self.root / GUILD_DIR / "plan.json"
 
     def save_plan(self, plan: Plan) -> None:
-        self.plan_path().parent.mkdir(parents=True, exist_ok=True)
-        self.plan_path().write_text(json.dumps(plan.to_dict(), indent=2), encoding="utf-8")
+        path = self.plan_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(plan.to_dict(), indent=2), encoding="utf-8")
+        os.replace(tmp, path)  # atomic: readers never see a half-written file
 
     def load_plan(self) -> Plan | None:
         p = self.plan_path()
@@ -198,7 +202,7 @@ class Guild:
             return None
         slug = "".join(c if c.isalnum() else "-" for c in task.title.lower())[:40].strip("-")
         branch = f"guild/{task.id.lower()}-{slug}"
-        if self._git("status", "--porcelain", "--", ".", f":(exclude){GUILD_DIR}"):
+        if self._git("status", "--porcelain", "--", ".", f":(exclude){GUILD_DIR}", ":(exclude).gitignore"):
             self.report("warn", "working tree is dirty; guild will not create a branch. Commit or stash first.")
             return None
         self._git("checkout", "-B", branch, check=True)

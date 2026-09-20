@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>guild</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --line: #2a2f3a; --text: #e6e8ee;
+    --muted: #8a92a6; --accent: #7aa2f7; --ok: #9ece6a; --warn: #e0af68; --err: #f7768e; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f5f6f8; --panel: #fff; --panel2: #f0f2f5; --line: #dfe3ea; --text: #1a1d24; --muted: #667085; --accent: #3b6fd8; --ok: #3d8b3d; --warn: #b7791f; --err: #c8404f; }
+  }
+  * { box-sizing: border-box }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5 }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .5px }
+  header .root { color: var(--muted); font-family: var(--mono); font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+  select, input, textarea, button { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px }
+  textarea { width: 100%; resize: vertical; font-family: inherit }
+  button { cursor: pointer } button:hover { border-color: var(--accent) } button:disabled { opacity: .5; cursor: default }
+  button.primary { background: var(--accent); color: #fff; border-color: transparent }
+  main { display: grid; grid-template-columns: 300px 1fr 380px; gap: 12px; padding: 12px; height: calc(100vh - 49px) }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; height: auto } }
+  .col { display: flex; flex-direction: column; gap: 12px; min-height: 0 }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 0 0 10px }
+  .grow { flex: 1; min-height: 0; display: flex; flex-direction: column }
+  .scroll { overflow: auto; min-height: 0 }
+  /* team */
+  .agent { display: flex; align-items: center; gap: 10px; padding: 7px 6px; border-radius: 6px; }
+  .agent .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); flex: none }
+  .agent.active .dot { background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 25%, transparent); animation: pulse 1.2s infinite }
+  .agent.done .dot { background: var(--ok) } .agent.bad .dot { background: var(--err) }
+  @keyframes pulse { 50% { opacity: .5 } }
+  .agent .name { font-weight: 600; width: 78px } .agent .model { color: var(--muted); font-family: var(--mono); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+  .agent .n { color: var(--muted); font-size: 11px }
+  /* tasks */
+  .task { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--panel2) }
+  .task .top { display: flex; gap: 8px; align-items: center }
+  .task .id { font-family: var(--mono); color: var(--muted); font-size: 12px }
+  .task .title { font-weight: 600; flex: 1 }
+  .task .desc { color: var(--muted); font-size: 13px; margin-top: 4px; white-space: pre-wrap }
+  .task .done { font-size: 12px; margin-top: 4px } .task .done b { color: var(--muted); font-weight: 500 }
+  .pill { font-size: 11px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted) }
+  .pill.done { color: var(--ok); border-color: var(--ok) } .pill.in_progress { color: var(--accent); border-color: var(--accent) } .pill.blocked { color: var(--err); border-color: var(--err) }
+  .task .acts { display: flex; gap: 6px; margin-top: 6px } .task .acts button { padding: 3px 8px; font-size: 12px }
+  /* log */
+  .log { font-family: var(--mono); font-size: 12px; line-height: 1.5 }
+  .log .ev { padding: 3px 6px; border-left: 2px solid var(--line); margin-bottom: 2px; white-space: pre-wrap; word-break: break-word }
+  .log .phase { border-color: var(--accent); color: var(--accent); font-weight: 600; margin-top: 6px }
+  .log .model_call { border-color: #7dcfff } .log .tool_call { border-color: var(--line); color: var(--muted) } .log .tool_call.bad { color: var(--err) }
+  .log .report.warn, .log .fallback { border-color: var(--warn); color: var(--warn) } .log .job_error { border-color: var(--err); color: var(--err) }
+  .log .job_done, .log .verification.ok { border-color: var(--ok); color: var(--ok) } .log .verification.bad { border-color: var(--err); color: var(--err) }
+  .log .decision { border-color: var(--warn) }
+  .log .t { color: var(--muted); margin-right: 6px }
+  /* doctor */
+  table { width: 100%; border-collapse: collapse; font-size: 12px } td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line) } th { color: var(--muted); font-weight: 500 }
+  td.mono { font-family: var(--mono); font-size: 11px } .ok { color: var(--ok) } .no { color: var(--warn) }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
+  .muted { color: var(--muted) } .small { font-size: 12px }
+  .tabs { display: flex; gap: 4px; margin-bottom: 8px } .tabs button { padding: 4px 10px; font-size: 12px } .tabs button.on { border-color: var(--accent); color: var(--accent) }
+  .hidden { display: none !important }
+  .result { background: var(--panel2); border-radius: 8px; padding: 10px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; max-height: 300px; overflow: auto }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12px } .kv b { color: var(--muted); font-weight: 500 }
+  .busy header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: slide 1.2s linear infinite }
+  @keyframes slide { from { transform: translateX(-100%) } to { transform: translateX(100%) } }
+  header { position: sticky }
+</style>
+</head>
+<body>
+<header>
+  <h1>guild</h1>
+  <span class="root" id="root"></span>
+  <label class="small muted">profile
+    <select id="profile"></select>
+  </label>
+  <button id="btnDoctor" title="check which models are reachable">doctor</button>
+  <span id="jobState" class="small muted"></span>
+</header>
+
+<main>
+  <!-- left: team -->
+  <div class="col">
+    <div class="card">
+      <h2>Team</h2>
+      <div id="team"></div>
+    </div>
+    <div class="card">
+      <h2>Ask a role</h2>
+      <div class="row" style="margin-bottom:6px">
+        <select id="askRole"></select>
+      </div>
+      <textarea id="askQ" rows="3" placeholder="e.g. Where does this app store user data?"></textarea>
+      <div class="row" style="margin-top:6px"><button id="btnAsk">ask</button></div>
+      <div id="askOut" class="result hidden" style="margin-top:8px"></div>
+    </div>
+    <div class="card grow">
+      <h2>Runs &amp; cost</h2>
+      <div class="scroll" id="runs"></div>
+    </div>
+  </div>
+
+  <!-- middle: plan -->
+  <div class="col">
+    <div class="card">
+      <h2>Goal</h2>
+      <textarea id="goal" rows="2" placeholder="What should the team build? Keep it concrete: 'Add X with tests'"></textarea>
+      <details style="margin-top:6px"><summary class="small muted">extra brief (optional — paste a spec or Kaggle description)</summary>
+        <textarea id="ctx" rows="5" style="margin-top:6px"></textarea></details>
+      <div class="row" style="margin-top:8px">
+        <button class="primary" id="btnPlan">plan</button>
+        <button id="btnRunNext">run next task</button>
+        <button id="btnRunAll">run all</button>
+        <label class="small muted"><input type="checkbox" id="skipSec"> skip security</label>
+        <label class="small muted"><input type="checkbox" id="skipDocs"> skip docs</label>
+      </div>
+    </div>
+    <div class="card grow">
+      <h2>Plan</h2>
+      <div class="scroll" id="plan"><div class="muted">No plan yet. Enter a goal and press <b>plan</b>.</div></div>
+    </div>
+  </div>
+
+  <!-- right: activity -->
+  <div class="col">
+    <div class="card grow">
+      <div class="row" style="justify-content:space-between"><h2 style="margin:0">Activity</h2>
+        <span><label class="small muted"><input type="checkbox" id="showTools" checked> tools</label> <button id="btnClear" class="small">clear</button></span></div>
+      <div class="scroll log" id="log" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="doctorCard">
+      <h2>Doctor</h2>
+      <div id="doctor" class="muted small">press <b>doctor</b> to check models</div>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = async (path, body) => {
+  const r = await fetch(path, body ? {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)} : {});
+  if (!r.ok) { const t = await r.text(); throw new Error(t.slice(0, 300)); }
+  return r.json();
+};
+const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const ROLES = ['lead','engineer','verifier','critic','security','docs','researcher'];
+let state = null, agentStats = {};
+
+// ---------- team panel
+function renderTeam() {
+  $('#team').innerHTML = ROLES.map(r => {
+    const s = agentStats[r] || {};
+    return `<div class="agent ${s.state||''}" id="ag-${r}"><span class="dot"></span><span class="name">${r}</span><span class="model" title="${esc(s.model||'')}">${esc(s.model||'—')}</span><span class="n">${s.calls? s.calls+'×':''}</span></div>`;
+  }).join('');
+}
+function setAgent(r, patch) { agentStats[r] = Object.assign(agentStats[r]||{}, patch); renderTeam(); }
+function resetAgents(){ for (const r of ROLES) agentStats[r] = {}; renderTeam(); }
+
+// ---------- plan
+function renderPlan(plan) {
+  const el = $('#plan');
+  if (!plan) { el.innerHTML = '<div class="muted">No plan yet. Enter a goal and press <b>plan</b>.</div>'; return; }
+  let h = `<div class="small muted" style="margin-bottom:8px"><b>Goal:</b> ${esc(plan.goal)}</div>`;
+  if (plan.roadmap?.length) h += `<div class="small" style="margin-bottom:10px"><b class="muted">Roadmap</b><ol style="margin:4px 0 0 18px;padding:0">${plan.roadmap.map(m=>`<li>${esc(m)}</li>`).join('')}</ol></div>`;
+  if (plan.questions_for_owner?.length) h += `<div class="small" style="margin-bottom:10px;color:var(--warn)"><b>Questions for you</b><ul style="margin:4px 0 0 18px;padding:0">${plan.questions_for_owner.map(q=>`<li>${esc(q)}</li>`).join('')}</ul></div>`;
+  h += plan.tasks.map(t => `
+    <div class="task" data-id="${esc(t.id)}">
+      <div class="top"><span class="id">${esc(t.id)}</span><span class="title">${esc(t.title)}</span><span class="pill ${esc(t.status)}">${esc(t.status)}</span></div>
+      <div class="desc">${esc(t.description)}</div>
+      <div class="done"><b>done when:</b> ${esc(t.done_when)}${t.depends_on?.length?` &nbsp;<b>after:</b> ${esc(t.depends_on.join(', '))}`:''}${t.branch?` &nbsp;<b>branch:</b> <span class="mono">${esc(t.branch)}</span>`:''}</div>
+      ${t.notes?`<div class="small" style="color:var(--warn);margin-top:4px;white-space:pre-wrap">${esc(t.notes.slice(0,600))}</div>`:''}
+      <div class="acts">
+        <button data-act="run">run</button>
+        <button data-act="todo" ${t.status==='todo'?'disabled':''}>reset</button>
+        <button data-act="done" ${t.status==='done'?'disabled':''}>mark done</button>
+        <button data-act="edit">edit</button>
+        <button data-act="delete">delete</button>
+      </div>
+    </div>`).join('');
+  if (plan.risks?.length) h += `<div class="small muted" style="margin-top:8px"><b>Risks</b><ul style="margin:4px 0 0 18px;padding:0">${plan.risks.map(r=>`<li>${esc(r)}</li>`).join('')}</ul></div>`;
+  el.innerHTML = h;
+  el.querySelectorAll('.task button').forEach(b => b.onclick = () => taskAction(b.closest('.task').dataset.id, b.dataset.act));
+}
+async function taskAction(id, act) {
+  try {
+    if (act === 'run') return startRun(id, false);
+    if (act === 'delete') { if (!confirm(`Delete ${id}?`)) return; renderPlan(await api('/api/plan/task', {id, delete:true})); return; }
+    if (act === 'edit') {
+      const t = state.plan.tasks.find(t => t.id === id);
+      const title = prompt('Title', t.title); if (title === null) return;
+      const description = prompt('Description', t.description); if (description === null) return;
+      const done_when = prompt('Done when', t.done_when); if (done_when === null) return;
+      renderPlan(await api('/api/plan/task', {id, title, description, done_when})); return;
+    }
+    renderPlan(await api('/api/plan/task', {id, status: act}));
+  } catch (e) { logLine('job_error', e.message); }
+}
+
+// ---------- jobs
+async function refresh() {
+  state = await api('/api/state');
+  $('#root').textContent = state.root;
+  const sel = $('#profile');
+  if (sel.options.length === 0) {
+    for (const p of state.profiles) sel.add(new Option(p, p));
+    for (const r of state.roles) $('#askRole').add(new Option(r, r));
+    $('#askRole').value = 'lead';
+  }
+  sel.value = state.config.profile;
+  renderPlan(state.plan);
+  setBusy(state.busy, state.job);
+}
+function setBusy(b, job) {
+  document.body.classList.toggle('busy', b);
+  ['#btnPlan','#btnRunNext','#btnRunAll','#btnAsk'].forEach(s => $(s).disabled = b);
+  $('#jobState').textContent = b ? `running: ${job?.kind}…` : '';
+}
+async function startPlan() {
+  const goal = $('#goal').value.trim(); if (!goal) return $('#goal').focus();
+  resetAgents(); logLine('phase', `▶ plan: ${goal}`);
+  try { await api('/api/plan', {goal, context: $('#ctx').value, profile: $('#profile').value}); await refresh(); }
+  catch (e) { logLine('job_error', e.message); }
+}
+async function startRun(task_id, all) {
+  const skip = [];
+  if ($('#skipSec').checked) skip.push('security'); if ($('#skipDocs').checked) skip.push('docs');
+  resetAgents();
+  try { await api('/api/run', {task_id, all, skip, profile: $('#profile').value}); await refresh(); }
+  catch (e) { logLine('job_error', e.message); }
+}
+async function ask() {
+  const question = $('#askQ').value.trim(); if (!question) return;
+  resetAgents(); $('#askOut').classList.add('hidden');
+  try { await api('/api/ask', {role: $('#askRole').value, question, profile: $('#profile').value}); await refresh(); }
+  catch (e) { logLine('job_error', e.message); }
+}
+$('#btnPlan').onclick = startPlan;
+$('#btnRunNext').onclick = () => startRun(null, false);
+$('#btnRunAll').onclick = () => startRun(null, true);
+$('#btnAsk').onclick = ask;
+$('#btnClear').onclick = () => $('#log').innerHTML = '';
+$('#profile').onchange = async e => { await api('/api/config', {profile: e.target.value}); doctor(); };
+$('#btnDoctor').onclick = () => doctor();
+$('#showTools').onchange = e => document.body.classList.toggle('hideTools', !e.target.checked);
+
+// ---------- doctor
+async function doctor() {
+  $('#doctor').innerHTML = '<span class="muted">checking…</span>';
+  try {
+    const d = await api('/api/doctor?profile=' + encodeURIComponent($('#profile').value));
+    let last = '';
+    $('#doctor').innerHTML = `<div class="small muted" style="margin-bottom:6px">${esc(d.profile.description)} · git: ${d.git?'<span class=ok>yes</span>':'<span class=no>no</span>'} · cap $${d.profile.limits.max_usd_per_run}/run</div>
+      <table><tr><th>slot</th><th>model</th><th>status</th></tr>${d.rows.map(r => { const s = r.slot===last?'':r.slot; last=r.slot;
+        return `<tr><td>${esc(s)}</td><td class="mono">${esc(r.model)}</td><td class="${r.ok?'ok':'no'} mono">${esc(r.status)}</td></tr>`; }).join('')}</table>`;
+  } catch (e) { $('#doctor').innerHTML = `<span class="no">${esc(e.message)}</span>`; }
+}
+
+// ---------- runs
+async function loadRuns() {
+  try {
+    const runs = await api('/api/runs');
+    const total = runs.reduce((a, r) => a + r.usd, 0);
+    $('#runs').innerHTML = runs.length ? `<div class="small muted" style="margin-bottom:6px">est. total $${total.toFixed(4)} over ${runs.length} runs</div>` +
+      runs.map(r => `<div class="kv" style="padding:6px 0;border-bottom:1px solid var(--line)"><b>${esc(r.id)}</b><span>${esc(r.profile)} · ${r.calls} calls · ${(r.input_tokens+r.output_tokens).toLocaleString()} tok · $${r.usd}</span><b>phases</b><span class="muted">${esc(r.phases.join(' › '))}</span></div>`).join('')
+      : '<div class="muted small">no runs yet</div>';
+  } catch (e) { $('#runs').innerHTML = `<span class="no small">${esc(e.message)}</span>`; }
+}
+
+// ---------- live events
+function logLine(cls, text) {
+  const d = document.createElement('div'); d.className = 'ev ' + cls;
+  const t = new Date().toLocaleTimeString([], {hour12:false});
+  d.innerHTML = `<span class="t">${t}</span>${esc(text)}`;
+  const log = $('#log'); const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+  log.appendChild(d); if (log.children.length > 800) log.removeChild(log.firstChild);
+  if (stick) log.scrollTop = log.scrollHeight;
+}
+function onEvent(ev) {
+  switch (ev.kind) {
+    case 'phase': {
+      const who = {plan:'lead', implement:'engineer', verify:'verifier', critique:'critic', security:'security', lead_review:'lead', docs:'docs', ask: ev.role}[ev.phase];
+      for (const r of ROLES) if (agentStats[r]?.state === 'active') setAgent(r, {state:'done'});
+      if (who) setAgent(who, {state:'active'});
+      logLine('phase', `▶ ${ev.phase}${ev.task_id?' '+ev.task_id:''}${ev.round?' round '+ev.round:''}${ev.escalated?' (escalated)':''}${ev.goal?': '+ev.goal:''}`);
+      break; }
+    case 'model_call':
+      setAgent(ev.role, {model: ev.model, calls: (agentStats[ev.role]?.calls||0)+1});
+      logLine('model_call', `${ev.role} ← ${ev.model}  ${ev.input_tokens}→${ev.output_tokens} tok  ${ev.latency_s}s${ev.usd?'  $'+ev.usd:''}${ev.n_tool_calls?'  ('+ev.n_tool_calls+' tool calls)':''}${ev.content_preview && !ev.n_tool_calls ? '\n' + ev.content_preview.slice(0,200) : ''}`);
+      break;
+    case 'tool_call':
+      logLine('tool_call' + (ev.ok?'':' bad'), `  ${ev.role} · ${ev.tool}(${Object.entries(ev.args||{}).map(([k,v])=>k+'='+JSON.stringify(v).slice(0,60)).join(', ')}) → ${String(ev.result_preview).slice(0,120).replace(/\n/g,' ⏎ ')}`);
+      break;
+    case 'verification':
+      setAgent('verifier', {state: ev.passed?'done':'bad'});
+      logLine('verification ' + (ev.passed?'ok':'bad'), `tests ${ev.passed?'PASSED':'FAILED'}${ev.tests_run!=null?' ('+ev.tests_run+' run)':''}${ev.failures?.length?'\n  '+ev.failures.slice(0,5).join('\n  '):''}`); break;
+    case 'decision':
+      logLine('decision', `${ev.role}: ${ev.decision||ev.status||''} ${ev.notes||ev.summary||''}`.trim()); break;
+    case 'fallback': logLine('fallback', `fallback: ${ev.model} failed (${ev.reason})`); break;
+    case 'report': if (ev.level !== 'phase' && !ev.msg.includes('trying next candidate')) logLine('report ' + ev.level, ev.msg); break;
+    case 'task_end':
+      logLine(ev.accepted?'job_done':'job_error', `task ${ev.task_id} ${ev.accepted?'ACCEPTED':'not accepted'} · ${ev.rounds} round(s)${ev.escalated?' · escalated':''} · $${ev.cost_usd}${ev.branch?' · branch '+ev.branch+' — review & merge it':''}`); break;
+    case 'run_end': logLine('job_done', `run finished · $${ev.total_usd}`); break;
+    case 'job_done':
+      for (const r of ROLES) if (agentStats[r]?.state === 'active') setAgent(r, {state:'done'});
+      if (ev.job === 'ask' && ev.result) { $('#askOut').textContent = JSON.stringify(ev.result.data ?? ev.result.raw, null, 2); $('#askOut').classList.remove('hidden'); }
+      refresh(); loadRuns(); break;
+    case 'job_error':
+      for (const r of ROLES) if (agentStats[r]?.state === 'active') setAgent(r, {state:'bad'});
+      logLine('job_error', `error: ${ev.error}`); refresh(); loadRuns(); break;
+  }
+}
+function connect() {
+  const es = new EventSource('/api/events');
+  es.onmessage = e => { try { onEvent(JSON.parse(e.data)); } catch {} };
+  es.onerror = () => { es.close(); setTimeout(connect, 2000); };
+}
+const style = document.createElement('style'); style.textContent = '.hideTools .tool_call{display:none}'; document.head.appendChild(style);
+
+renderTeam(); refresh().then(() => { doctor(); loadRuns(); connect(); });
+</script>
+</body>
+</html>

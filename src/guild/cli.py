@@ -337,5 +337,19 @@ def roles(project: Optional[Path] = typer.Option(None, "--project", "-C")):
     console.print(t2)
 
 
+@app.command()
+def ui(project: Optional[Path] = typer.Option(None, "--project", "-C"),
+       port: int = typer.Option(7331, help="local port"),
+       no_browser: bool = typer.Option(False, "--no-browser", help="don't open a browser tab")):
+    """Open the local web dashboard (needs `pip install guild-ai[ui]`)."""
+    root = find_project_root(project)
+    try:
+        from .ui.server import serve
+    except ImportError:
+        err.print("[red]dashboard needs extra packages:[/red]  pip install \"guild-ai[ui]\"   (or: pip install fastapi uvicorn)")
+        raise typer.Exit(2)
+    serve(root, port=port, open_browser=not no_browser)
+
+
 if __name__ == "__main__":
     app()
