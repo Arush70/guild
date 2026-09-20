@@ -99,7 +99,7 @@ the same process as the CLI, so there's nothing to deploy.
 | `guild doctor` | check every model in the active profile: reachable / key set / not pulled |
 | `guild plan "goal" [--context brief.md]` | Lead writes roadmap + tasks → `.guild/plan.json` |
 | `guild status` | show the plan and task states |
-| `guild run [TASK_ID] [--all] [-y] [--skip security,docs]` | implement task(s) through the full loop |
+| `guild run [T1 T3 ...] [--all] [-y] [--skip security,docs]` | implement task(s) through the full loop |
 | `guild review [--ref main] [--security-only]` | Critic + Security on the current diff, nothing else |
 | `guild ask ROLE "question"` | ask one role (e.g. `researcher`, `security`) about the project |
 | `guild cost` | token + estimated cost table from saved traces |

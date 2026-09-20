@@ -53,3 +53,15 @@ def test_cost_tracker_prices():
     usd = t.price("anthropic/claude-sonnet-5", Usage(1_000_000, 1_000_000))
     assert usd == pytest.approx(inp + out)
     assert t.price("ollama/anything", Usage(10**6, 10**6)) == 0.0
+
+
+@pytest.mark.parametrize("text,vague", [
+    ("test_multiply passes", False),
+    ("pytest exits 0", False),
+    ("The interface is designed and documented.", True),
+    ("works well", True),
+    ("", True),
+])
+def test_vague_done_when(text, vague):
+    from guild.workflow import vague_done_when
+    assert vague_done_when(text) is vague

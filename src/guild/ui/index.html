@@ -39,6 +39,7 @@
   /* tasks */
   .task { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--panel2) }
   .task .top { display: flex; gap: 8px; align-items: center }
+  .task .sel { margin: 0; padding: 0; width: 15px; height: 15px }
   .task .id { font-family: var(--mono); color: var(--muted); font-size: 12px }
   .task .title { font-weight: 600; flex: 1 }
   .task .desc { color: var(--muted); font-size: 13px; margin-top: 4px; white-space: pre-wrap }
@@ -112,6 +113,7 @@
       <div class="row" style="margin-top:8px">
         <button class="primary" id="btnPlan">plan</button>
         <button id="btnRunNext">run next task</button>
+        <button id="btnRunSel" disabled>run selected</button>
         <button id="btnRunAll">run all</button>
         <label class="small muted"><input type="checkbox" id="skipSec"> skip security</label>
         <label class="small muted"><input type="checkbox" id="skipDocs"> skip docs</label>
@@ -159,15 +161,16 @@ function setAgent(r, patch) { agentStats[r] = Object.assign(agentStats[r]||{}, p
 function resetAgents(){ for (const r of ROLES) agentStats[r] = {}; renderTeam(); }
 
 // ---------- plan
-function renderPlan(plan) {
+function renderPlan(plan, warnings) {
   const el = $('#plan');
   if (!plan) { el.innerHTML = '<div class="muted">No plan yet. Enter a goal and press <b>plan</b>.</div>'; return; }
   let h = `<div class="small muted" style="margin-bottom:8px"><b>Goal:</b> ${esc(plan.goal)}</div>`;
   if (plan.roadmap?.length) h += `<div class="small" style="margin-bottom:10px"><b class="muted">Roadmap</b><ol style="margin:4px 0 0 18px;padding:0">${plan.roadmap.map(m=>`<li>${esc(m)}</li>`).join('')}</ol></div>`;
+  if (warnings?.length) h += `<div class="small" style="margin-bottom:10px;color:var(--warn)"><b>Plan check</b><ul style="margin:4px 0 0 18px;padding:0">${warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></div>`;
   if (plan.questions_for_owner?.length) h += `<div class="small" style="margin-bottom:10px;color:var(--warn)"><b>Questions for you</b><ul style="margin:4px 0 0 18px;padding:0">${plan.questions_for_owner.map(q=>`<li>${esc(q)}</li>`).join('')}</ul></div>`;
   h += plan.tasks.map(t => `
     <div class="task" data-id="${esc(t.id)}">
-      <div class="top"><span class="id">${esc(t.id)}</span><span class="title">${esc(t.title)}</span><span class="pill ${esc(t.status)}">${esc(t.status)}</span></div>
+      <div class="top"><input type="checkbox" class="sel" ${t.status==='done'?'disabled':''} title="select for 'run selected'"><span class="id">${esc(t.id)}</span><span class="title">${esc(t.title)}</span><span class="pill ${esc(t.status)}">${esc(t.status)}</span></div>
       <div class="desc">${esc(t.description)}</div>
       <div class="done"><b>done when:</b> ${esc(t.done_when)}${t.depends_on?.length?` &nbsp;<b>after:</b> ${esc(t.depends_on.join(', '))}`:''}${t.branch?` &nbsp;<b>branch:</b> <span class="mono">${esc(t.branch)}</span>`:''}</div>
       ${t.notes?`<div class="small" style="color:var(--warn);margin-top:4px;white-space:pre-wrap">${esc(t.notes.slice(0,600))}</div>`:''}
@@ -182,7 +185,11 @@ function renderPlan(plan) {
   if (plan.risks?.length) h += `<div class="small muted" style="margin-top:8px"><b>Risks</b><ul style="margin:4px 0 0 18px;padding:0">${plan.risks.map(r=>`<li>${esc(r)}</li>`).join('')}</ul></div>`;
   el.innerHTML = h;
   el.querySelectorAll('.task button').forEach(b => b.onclick = () => taskAction(b.closest('.task').dataset.id, b.dataset.act));
+  el.querySelectorAll('.task .sel').forEach(c => c.onchange = updateSel);
+  updateSel();
 }
+function selectedIds() { return [...document.querySelectorAll('.task .sel:checked')].map(c => c.closest('.task').dataset.id); }
+function updateSel() { const n = selectedIds().length; const b = $('#btnRunSel'); b.disabled = n === 0 || document.body.classList.contains('busy'); b.textContent = n ? `run selected (${n})` : 'run selected'; }
 async function taskAction(id, act) {
   try {
     if (act === 'run') return startRun(id, false);
@@ -209,12 +216,13 @@ async function refresh() {
     $('#askRole').value = 'lead';
   }
   sel.value = state.config.profile;
-  renderPlan(state.plan);
+  renderPlan(state.plan, state.plan_warnings);
   setBusy(state.busy, state.job);
 }
 function setBusy(b, job) {
   document.body.classList.toggle('busy', b);
   ['#btnPlan','#btnRunNext','#btnRunAll','#btnAsk'].forEach(s => $(s).disabled = b);
+  updateSel();
   $('#jobState').textContent = b ? `running: ${job?.kind}…` : '';
 }
 async function startPlan() {
@@ -223,11 +231,11 @@ async function startPlan() {
   try { await api('/api/plan', {goal, context: $('#ctx').value, profile: $('#profile').value}); await refresh(); }
   catch (e) { logLine('job_error', e.message); }
 }
-async function startRun(task_id, all) {
+async function startRun(task_id, all, task_ids) {
   const skip = [];
   if ($('#skipSec').checked) skip.push('security'); if ($('#skipDocs').checked) skip.push('docs');
   resetAgents();
-  try { await api('/api/run', {task_id, all, skip, profile: $('#profile').value}); await refresh(); }
+  try { await api('/api/run', {task_id, task_ids: task_ids || [], all, skip, profile: $('#profile').value}); await refresh(); }
   catch (e) { logLine('job_error', e.message); }
 }
 async function ask() {
@@ -239,6 +247,7 @@ async function ask() {
 $('#btnPlan').onclick = startPlan;
 $('#btnRunNext').onclick = () => startRun(null, false);
 $('#btnRunAll').onclick = () => startRun(null, true);
+$('#btnRunSel').onclick = () => startRun(null, false, selectedIds());
 $('#btnAsk').onclick = ask;
 $('#btnClear').onclick = () => $('#log').innerHTML = '';
 $('#profile').onchange = async e => { await api('/api/config', {profile: e.target.value}); doctor(); };

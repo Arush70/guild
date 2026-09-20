@@ -172,6 +172,8 @@ def _show_plan(p) -> None:
     for task in p.tasks:
         t.add_row(task.id, task.status, task.title, task.done_when, ",".join(task.depends_on))
     console.print(t)
+    if p.warnings():
+        console.print(Panel("\n".join(f"- {w}" for w in p.warnings()), title="Plan check", style="yellow"))
     if p.risks:
         console.print(Panel("\n".join(f"- {r}" for r in p.risks), title="Risks"))
     if p.questions_for_owner:
@@ -190,7 +192,7 @@ def status(project: Optional[Path] = typer.Option(None, "--project", "-C")):
 
 
 @app.command()
-def run(task_id: Optional[str] = typer.Argument(None, help="task id (default: next runnable)"),
+def run(task_ids: Optional[list[str]] = typer.Argument(None, help="task id(s), e.g. T1 T3 (default: next runnable)"),
         project: Optional[Path] = typer.Option(None, "--project", "-C"),
         profile: Optional[str] = typer.Option(None, "--profile", "-p"),
         all_tasks: bool = typer.Option(False, "--all", help="run every runnable task in order"),
@@ -205,22 +207,28 @@ def run(task_id: Optional[str] = typer.Argument(None, help="task id (default: ne
     roles = [r for r in cfg.roles_enabled if r not in {s.strip() for s in skip.split(",") if s.strip()}]
 
     try:
+        queue_ = list(task_ids or [])
         while True:
-            task = plan_.get(task_id) if task_id else plan_.next_task()
+            if queue_:
+                task = plan_.get(queue_.pop(0))
+                if task.status == "done":
+                    continue
+            else:
+                task = None if task_ids else plan_.next_task()
             if task is None:
                 console.print("[green]no runnable tasks left[/green]"); break
             console.print(Panel(f"[bold]{task.id}[/bold] {task.title}\n{task.description}\n\n[dim]done when:[/dim] {task.done_when}",
                                 title="task"))
-            if not yes and not all_tasks and task_id is None:
+            if not yes and not all_tasks and not task_ids:
                 if not typer.confirm("Run this task?", default=True):
                     break
             out = g.run_task(plan_, task, roles=roles)
             _show_outcome(out)
-            if task_id or not all_tasks:
-                break
             if not out.accepted:
                 console.print("[yellow]stopping: task not accepted[/yellow]"); break
-            if not yes and not typer.confirm("Continue with next task?", default=True):
+            if not queue_ and not all_tasks:
+                break
+            if not yes and not queue_ and not typer.confirm("Continue with next task?", default=True):
                 break
     except (AllProvidersFailed, BudgetExceeded) as e:
         err.print(f"[red]{e}[/red]")
