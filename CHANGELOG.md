@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- Verification is deterministic: guild runs the test command itself (no LLM verifier in the loop).
+- Text tool-call fallback: `{"name": ..., "arguments": ...}` written as plain text by small models is executed.
+- `.guild/` is never committed or included in review diffs.
+- `edit_file` rejects empty `old_text` with a helpful message.
+- Selected tasks all run; only dependents of a failed task are skipped.
 - Lead prompt: tasks must be concrete code changes with checkable `done_when`; questions only when blocking.
 - Engineer prompt: implement a minimal version instead of blocking on vague tasks.
 - Plan check: warns about tasks whose `done_when` is not verifiable (CLI + dashboard).

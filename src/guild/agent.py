@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .config import Role
-from .providers import Message, Router
+from .providers import Message, Router, ToolCall
 from .tools import ToolContext, dispatch, specs_for
 from .trace import Trace
 
@@ -54,6 +54,57 @@ def extract_json(text: str) -> dict[str, Any] | None:
     return None
 
 
+_TOOL_KEYS = (("name", "arguments"), ("name", "parameters"), ("tool", "arguments"),
+              ("tool", "args"), ("function", "arguments"), ("tool_name", "tool_input"))
+
+
+def extract_text_tool_calls(text: str, allowed: set[str]) -> list[ToolCall]:
+    """Small models often *write* a tool call as JSON text instead of using the protocol.
+    Recognise {"name": "...", "arguments": {...}} (and common variants), possibly several,
+    possibly fenced, and turn them into real ToolCalls. Only names in `allowed` count."""
+    calls: list[ToolCall] = []
+    candidates: list[str] = [m.group(1) for m in _JSON_BLOCK.finditer(text)]
+    # also scan for bare top-level objects
+    depth, start = 0, -1
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                candidates.append(text[start:i + 1])
+    seen: set[str] = set()
+    for cand in candidates:
+        if cand in seen:
+            continue
+        seen.add(cand)
+        try:
+            obj = json.loads(cand)
+        except json.JSONDecodeError:
+            continue
+        objs = obj if isinstance(obj, list) else [obj]
+        for o in objs:
+            if not isinstance(o, dict):
+                continue
+            for nk, ak in _TOOL_KEYS:
+                name = o.get(nk)
+                if isinstance(name, dict):  # {"function": {"name":..., "arguments":...}}
+                    name, o = name.get("name"), name
+                if isinstance(name, str) and name in allowed and ak in o:
+                    args = o.get(ak)
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except json.JSONDecodeError:
+                            args = {}
+                    calls.append(ToolCall(id=f"text_{len(calls)}", name=name,
+                                          arguments=args if isinstance(args, dict) else {}))
+                    break
+    return calls
+
+
 class Agent:
     def __init__(self, role: Role, router: Router, ctx: ToolContext, trace: Trace,
                  *, escalate: bool = False, max_tokens: int = 8192, temperature: float = 0.2):
@@ -90,6 +141,27 @@ class Agent:
                                   stop_reason=comp.stop_reason, content_preview=comp.message.content)
             messages.append(comp.message)
             last_text = comp.message.content
+
+            if not comp.message.tool_calls and tools:
+                # fallback: tool call written as plain text
+                text_calls = extract_text_tool_calls(last_text, {t.name for t in tools})
+                if text_calls:
+                    self.trace.emit("note", role=self.role.name,
+                                    msg=f"model wrote {len(text_calls)} tool call(s) as text; executing them")
+                    results = []
+                    for tc in text_calls:
+                        result = dispatch(self.ctx, tc.name, tc.arguments)
+                        ok = not result.startswith(("refused:", "unknown tool:", "tool error", "bad arguments"))
+                        self.trace.tool_call(role=self.role.name, tool=tc.name, args=tc.arguments,
+                                             result_preview=result, ok=ok)
+                        results.append(f"[{tc.name}] {result}")
+                    messages.append(Message("user", "You wrote tool calls as text. I executed them; results:\n\n"
+                                            + "\n\n".join(results)
+                                            + "\n\nContinue. Use the tool-calling interface for further tools, "
+                                              "and reply with your final JSON when done."))
+                    if self.ctx.tool_calls_made >= self.role.max_tool_calls:
+                        messages.append(Message("user", "Tool budget exhausted. Reply now with your final JSON."))
+                    continue
 
             if not comp.message.tool_calls:
                 break

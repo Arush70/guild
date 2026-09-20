@@ -19,6 +19,8 @@ you ──goal──▶ Lead ──tasks──▶ Engineer ──branch──▶
   to add or override one. No code changes.
 - **Fallback chains.** Every slot lists candidates in order; unreachable or unpaid ones are
   skipped. Escalates the Engineer to a stronger model after repeated failures.
+- **Deterministic verification.** Tests are run by guild, not by a model, so a pass is a real pass.
+- **Small-model friendly.** If a local model writes a tool call as text instead of using the protocol, guild executes it anyway.
 - **Guardrails.** Tools are scoped to the project directory. Reviewers are read-only. The
   Writer can only touch Markdown. API keys are stripped from every subprocess. Nothing is
   merged to `main` by the tool — you review the branch.
@@ -114,7 +116,7 @@ the same process as the CLI, so there's nothing to deploy.
 |---|---|---|---|
 | **lead** | frontier | read, search, tests | roadmap, task breakdown, accept/revise/replan, improvement suggestions |
 | **engineer** | coder → coder_escalation | read/write/edit, shell, tests, git | implement one task on a branch with tests |
-| **verifier** | cheap | tests, shell (read-only) | run the tests, report what happened — never predicts |
+| **verifier** | — | — | not a model: guild runs your `test_command` (and `lint_command`) itself and reports exit code, counts and failures |
 | **critic** | reasoner | read, search, diff | adversarial code review with severity-ranked findings |
 | **security** | reasoner | read, search, diff, shell (read-only) | secrets, injection, deps, privacy, CI/supply-chain |
 | **docs** | cheap | read, write (Markdown only) | README / CHANGELOG / docs after each accepted task |

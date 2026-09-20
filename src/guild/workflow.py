@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -232,7 +233,7 @@ class Guild:
     def _commit(self, message: str) -> None:
         if not self._has_git() or self.dry_run:
             return
-        self._git("add", "-A")
+        self._git("add", "-A", "--", ".", f":(exclude){GUILD_DIR}")
         if self._git("diff", "--cached", "--quiet") == "" and self._git("diff", "--cached", "--stat") == "":
             return
         self._git("commit", "-q", "-m", message)
@@ -240,7 +241,41 @@ class Guild:
     def _diff_text(self, base: str | None) -> str:
         if not self._has_git():
             return "(no git; review working tree)"
-        return self._git("diff", base or "HEAD~1") or self._git("diff") or "(no diff)"
+        excl = ["--", ".", f":(exclude){GUILD_DIR}"]
+        return (self._git("diff", base or "HEAD~1", *excl) or self._git("diff", *excl)
+                or self._git("diff", "--cached", *excl) or "(no diff)")
+
+    # ------------------------------------------------------------------ verification
+    _PYTEST_RX = re.compile(r"(\d+) passed|(\d+) failed|(\d+) error", re.I)
+    _FAIL_LINE_RX = re.compile(r"^(FAILED|ERROR) (.+?)(?: - (.*))?$", re.M)
+
+    def verify(self) -> dict:
+        """Run the project's test command directly (no model involved) and report facts."""
+        cmd = self.cfg.test_command
+        res = self.sandbox.run(cmd, timeout=600)
+        out = res.output
+        passed_n = failed_n = 0
+        for m in self._PYTEST_RX.finditer(out):
+            if m.group(1):
+                passed_n += int(m.group(1))
+            if m.group(2):
+                failed_n += int(m.group(2))
+            if m.group(3):
+                failed_n += int(m.group(3))
+        failures = [f"{m.group(2)}: {m.group(3) or ''}".strip(": ") for m in self._FAIL_LINE_RX.finditer(out)][:20]
+        if res.returncode != 0 and not failures:
+            failures = [f"{cmd} exited {res.returncode}"]
+        tail = "\n".join(out.strip().splitlines()[-25:])
+        result = {"passed": res.returncode == 0, "tests_run": passed_n + failed_n,
+                  "failures": failures, "output_tail": tail, "command": cmd, "exit_code": res.returncode}
+        if self.cfg.lint_command and res.returncode == 0:
+            lint = self.sandbox.run(self.cfg.lint_command, timeout=300)
+            result["lint_passed"] = lint.returncode == 0
+            if lint.returncode != 0:
+                result["passed"] = False
+                result["failures"].append(f"lint: {self.cfg.lint_command} exited {lint.returncode}")
+                result["output_tail"] += "\n--- lint ---\n" + "\n".join(lint.output.strip().splitlines()[-15:])
+        return result
 
     # ------------------------------------------------------------------ run one task
     def run_task(self, plan: Plan, task: Task, *, roles: list[str] | None = None) -> TaskOutcome:
@@ -281,14 +316,13 @@ class Guild:
                 self.report("warn", f"engineer blocked: {task.notes}")
                 break
 
-            # verify
+            # verify — deterministic: guild runs the tests itself, no model in the loop
             verification = None
             if "verifier" in enabled:
                 self._phase("verify", task_id=task.id, round=rounds)
-                ver = self.agent("verifier").run("Run the tests and report.", context_blocks=None)
-                verification = ver.data or {"passed": False, "failures": ["verifier returned no JSON"], "output_tail": ver.raw[:500]}
-                self.trace.emit("verification", round=rounds, **{k: verification.get(k) for k in ("passed", "tests_run", "failures")})
-                self.report("info", f"verification: {'PASS' if verification.get('passed') else 'FAIL'}")
+                verification = self.verify()
+                self.trace.emit("verification", round=rounds, **{k: verification.get(k) for k in ("passed", "tests_run", "failures", "exit_code")})
+                self.report("info", f"verification: {'PASS' if verification.get('passed') else 'FAIL'} ({verification.get('tests_run')} tests)")
 
             diff = self._diff_text(base_ref)
             review_ctx = {"Task": task_brief, "Diff": diff[:30000],
@@ -361,14 +395,19 @@ class Guild:
         """Run specific task ids in order, or every runnable task when all_tasks is set."""
         outcomes: list[TaskOutcome] = []
         if task_ids:
+            # explicitly selected tasks all get their turn; a failure only skips tasks that depend on it
+            failed: set[str] = set()
             for tid in task_ids:
                 task = plan.get(tid)
                 if task.status == "done":
                     continue
+                if any(d in failed for d in task.depends_on):
+                    self.report("warn", f"skipping {tid}: depends on a task that was not accepted")
+                    continue
                 out = self.run_task(plan, task, roles=roles)
                 outcomes.append(out)
-                if stop_on_failure and not out.accepted:
-                    break
+                if not out.accepted:
+                    failed.add(tid)
             return outcomes
         while True:
             task = plan.next_task()

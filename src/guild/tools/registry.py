@@ -148,6 +148,8 @@ def edit_file(ctx: ToolContext, path: str, old_text: str, new_text: str) -> str:
     p = ctx.resolve(path)
     if not p.is_file():
         return f"no such file: {path}"
+    if not old_text:
+        return "old_text must not be empty — to append, include the last line of the file in old_text; to create a file, use write_file"
     text = p.read_text(encoding="utf-8")
     n = text.count(old_text)
     if n == 0:
