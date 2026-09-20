@@ -1,0 +1,39 @@
+# Profile: lite  —  ~£10–20/month. Frontier model only where it matters; local/cheap for the loop.
+#
+# Strategy: the Lead (planning, roadmap, final sign-off) and escalations use Claude.
+# The Engineer runs locally on Ollama and only escalates to a paid coder after it fails
+# verification twice on the same task. Critic/Security use a cheap strong reasoner.
+#
+# Env vars: ANTHROPIC_API_KEY (required), DEEPSEEK_API_KEY / GEMINI_API_KEY (recommended),
+#           OLLAMA_HOST (optional).
+
+name: lite
+description: Claude for planning and review, local Ollama for coding, cheap APIs for critique/docs.
+monthly_budget_gbp: 15
+
+slots:
+  frontier:
+    - anthropic/claude-fable-5-1
+    - anthropic/claude-sonnet-5
+    - ollama/qwen3-coder:30b
+  coder:
+    - ollama/qwen3-coder:30b
+    - ollama/qwen2.5-coder:7b
+    - deepseek/deepseek-chat
+  coder_escalation:        # used only after `escalate_after` failed rounds
+    - anthropic/claude-sonnet-5
+    - deepseek/deepseek-chat
+  reasoner:
+    - deepseek/deepseek-reasoner
+    - gemini/gemini-2.5-flash
+    - ollama/deepseek-r1:14b
+  cheap:
+    - gemini/gemini-2.5-flash
+    - deepseek/deepseek-chat
+    - ollama/qwen2.5-coder:7b
+
+limits:
+  max_revision_rounds: 3
+  escalate_after: 2
+  max_tool_calls_per_task: 80
+  max_usd_per_run: 2.0

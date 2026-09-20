@@ -1,0 +1,33 @@
+# Profile: pro  —  pay-as-you-go, best model in every seat.
+#
+# Env vars: ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY (any missing provider is
+#           skipped in favour of the next candidate).
+
+name: pro
+description: Fable leads, Opus codes, GPT critiques, Gemini documents. Best quality, real cost.
+monthly_budget_gbp: null     # uncapped; per-run cap below still applies
+
+slots:
+  frontier:
+    - anthropic/claude-fable-5-1
+    - anthropic/claude-opus-5
+  coder:
+    - anthropic/claude-opus-5
+    - anthropic/claude-sonnet-5
+    - openai/gpt-5
+  coder_escalation:
+    - anthropic/claude-fable-5-1
+  reasoner:                 # critic + security: a different model family for an independent view
+    - openai/gpt-5
+    - gemini/gemini-2.5-pro
+    - anthropic/claude-sonnet-5
+  cheap:
+    - gemini/gemini-2.5-flash
+    - openai/gpt-5-mini
+    - anthropic/claude-haiku-4-5
+
+limits:
+  max_revision_rounds: 4
+  escalate_after: 1
+  max_tool_calls_per_task: 150
+  max_usd_per_run: 15.0

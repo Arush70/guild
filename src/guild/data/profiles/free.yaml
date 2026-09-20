@@ -1,0 +1,35 @@
+# Profile: free  —  £0/month. Local models via Ollama first, free cloud tiers as fallback.
+#
+# Slots are abstract capability tiers. Each slot lists candidates in order; the first
+# one that is configured (has its API key / is reachable) and doesn't error is used.
+#
+# Env vars: OLLAMA_HOST (default http://localhost:11434), GROQ_API_KEY, GEMINI_API_KEY,
+#           OPENROUTER_API_KEY — all optional. With none set, everything runs on Ollama.
+
+name: free
+description: Local-first. Ollama for everything, free cloud tiers as backup. No API keys required.
+monthly_budget_gbp: 0
+
+slots:
+  frontier:                # planning, final review — best model you can get for free
+    - ollama/qwen3-coder:30b
+    - groq/llama-3.3-70b-versatile
+    - gemini/gemini-2.5-flash
+    - ollama/qwen2.5-coder:7b
+  coder:                   # implementation loop — fast, good at tool use
+    - ollama/qwen3-coder:30b
+    - ollama/qwen2.5-coder:7b
+    - groq/llama-3.3-70b-versatile
+  reasoner:                # critique, security review
+    - ollama/deepseek-r1:14b
+    - groq/deepseek-r1-distill-llama-70b
+    - ollama/qwen2.5-coder:7b
+  cheap:                   # docs, summaries, verifier narration
+    - ollama/qwen2.5-coder:7b
+    - gemini/gemini-2.5-flash
+    - groq/llama-3.1-8b-instant
+
+limits:
+  max_revision_rounds: 3
+  max_tool_calls_per_task: 60
+  max_usd_per_run: 0        # hard stop: free profile never spends money
