@@ -129,3 +129,18 @@ def test_path_escape_refused(project, cfg, profile):
     g.close()
     ev = [e for e in read_trace(g.trace.path) if e["kind"] == "tool_call"][0]
     assert "refused" in ev["result_preview"]
+
+
+def test_run_tasks_selected_ids_in_order(project, cfg, profile):
+    eng = [{"status": "done", "summary": "", "files_changed": [], "tests_run": "", "notes_for_reviewer": ""}] * 2
+    fake = FakeProvider({"engineer": eng, "verifier": [VERIFIER_RUNS[1]] * 2, "critic": [APPROVE] * 2,
+                         "security": [APPROVE] * 2, "lead": [LEAD_ACCEPT] * 2, "docs": [DOCS[1]] * 2})
+    g = _guild(project, cfg, profile, fake)
+    t1 = Task(id="T1", title="a", description="x")
+    t2 = Task(id="T2", title="b", description="y")
+    t3 = Task(id="T3", title="c", description="z")
+    plan = Plan(goal="g", roadmap=[], tasks=[t1, t2, t3])
+    outs = g.run_tasks(plan, ["T3", "T1"])
+    g.close()
+    assert [o.task.id for o in outs] == ["T3", "T1"]
+    assert t3.status == "done" and t1.status == "done" and t2.status == "todo"

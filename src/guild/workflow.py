@@ -40,6 +40,18 @@ class Task:
     notes: str = ""
 
 
+_VAGUE = ("designed", "documented", "works well", "is complete", "is ready", "looks good",
+          "is implemented", "is created", "is done", "is added", "functional")
+
+
+def vague_done_when(text: str) -> bool:
+    """Heuristic: a done_when that names no test/command/file is probably not checkable."""
+    t = (text or "").lower()
+    concrete = ("test", "pytest", "pass", "exit", "returns", "assert", "exists", "contains", "==",
+                "file", ".py", "command", "output")
+    return not any(k in t for k in concrete) or any(v in t for v in _VAGUE) and not any(k in t for k in ("test", "pass"))
+
+
 @dataclass
 class Plan:
     goal: str
@@ -66,6 +78,15 @@ class Plan:
             if t.status == "todo" and all(d in done for d in t.depends_on):
                 return t
         return None
+
+    def warnings(self) -> list[str]:
+        out = []
+        for t in self.tasks:
+            if vague_done_when(t.done_when):
+                out.append(f"{t.id}: 'done when' is not checkable ({t.done_when!r}) — edit it before running")
+            if len(t.description or "") < 40:
+                out.append(f"{t.id}: description is very short; the engineer may not know what to build")
+        return out
 
     def get(self, task_id: str) -> Task:
         for t in self.tasks:
@@ -333,6 +354,31 @@ class Guild:
         self.trace.emit("task_end", task_id=task.id, accepted=accepted, rounds=rounds,
                         escalated=escalated, cost_usd=round(outcome.cost_usd, 6), branch=task.branch)
         return outcome
+
+    # ------------------------------------------------------------------ run several
+    def run_tasks(self, plan: Plan, task_ids: list[str] | None, *, all_tasks: bool = False,
+                  roles: list[str] | None = None, stop_on_failure: bool = True) -> list[TaskOutcome]:
+        """Run specific task ids in order, or every runnable task when all_tasks is set."""
+        outcomes: list[TaskOutcome] = []
+        if task_ids:
+            for tid in task_ids:
+                task = plan.get(tid)
+                if task.status == "done":
+                    continue
+                out = self.run_task(plan, task, roles=roles)
+                outcomes.append(out)
+                if stop_on_failure and not out.accepted:
+                    break
+            return outcomes
+        while True:
+            task = plan.next_task()
+            if task is None:
+                break
+            out = self.run_task(plan, task, roles=roles)
+            outcomes.append(out)
+            if not all_tasks or (stop_on_failure and not out.accepted):
+                break
+        return outcomes
 
     # ------------------------------------------------------------------ one-off ask
     def ask(self, role_name: str, question: str) -> AgentResult:

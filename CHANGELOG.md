@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Lead prompt: tasks must be concrete code changes with checkable `done_when`; questions only when blocking.
+- Engineer prompt: implement a minimal version instead of blocking on vague tasks.
+- Plan check: warns about tasks whose `done_when` is not verifiable (CLI + dashboard).
+- Run several tasks at once: `guild run T1 T3`, dashboard checkboxes + **run selected**.
 - `guild ui`: local web dashboard with live agent activity, plan editing, doctor and cost panels (`pip install guild-ai[ui]`).
 - Atomic plan.json writes; `.gitignore` edits no longer count as a dirty tree.
 

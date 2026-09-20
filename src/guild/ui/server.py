@@ -121,6 +121,7 @@ class PlanReq(BaseModel):
 
 class RunReq(BaseModel):
     task_id: str | None = None
+    task_ids: list[str] = []
     all: bool = False
     skip: list[str] = []
     profile: str | None = None
@@ -159,8 +160,15 @@ def create_app(root: Path) -> FastAPI:
     def state():
         cfg = load_project_config(root)
         plan = _read_plan(root)
+        warnings: list[str] = []
+        if plan:
+            from ..workflow import Plan
+            try:
+                warnings = Plan.from_dict(plan).warnings()
+            except (KeyError, TypeError):
+                warnings = []
         return {
-            "root": str(root), "config": cfg.model_dump(),
+            "root": str(root), "config": cfg.model_dump(), "plan_warnings": warnings,
             "profiles": list_available("profiles", root), "roles": list_available("roles", root),
             "plan": plan, "busy": hub.busy(),
             "job": _jsonable(hub.job) if hub.job else None,
@@ -225,22 +233,14 @@ def create_app(root: Path) -> FastAPI:
             g = _make_guild(req.profile)
             cfg = g.cfg
             roles_ = [r for r in cfg.roles_enabled if r not in set(req.skip)]
-            outcomes = []
             try:
                 p = g.load_plan()
                 if p is None:
                     raise RuntimeError("no plan yet")
-                while True:
-                    task = p.get(req.task_id) if req.task_id else p.next_task()
-                    if task is None:
-                        break
-                    out = g.run_task(p, task, roles=roles_)
-                    outcomes.append(out)
-                    if req.task_id or not req.all or not out.accepted:
-                        break
+                ids = req.task_ids or ([req.task_id] if req.task_id else None)
+                return g.run_tasks(p, ids, all_tasks=req.all, roles=roles_)
             finally:
                 g.close()
-            return outcomes
         hub.start("run", fn)
         return {"ok": True}
 
