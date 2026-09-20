@@ -65,3 +65,15 @@ def test_cost_tracker_prices():
 def test_vague_done_when(text, vague):
     from guild.workflow import vague_done_when
     assert vague_done_when(text) is vague
+
+
+def test_extract_text_tool_calls_variants():
+    from guild.agent import extract_text_tool_calls
+    allowed = {"read_file", "edit_file"}
+    txt = 'I will read it.\n```json\n{"name": "read_file", "arguments": {"path": "a.py"}}\n```\nthen {"tool": "edit_file", "args": {"path": "a.py", "old_text": "x", "new_text": "y"}}'
+    calls = extract_text_tool_calls(txt, allowed)
+    assert [(c.name, c.arguments["path"]) for c in calls] == [("read_file", "a.py"), ("edit_file", "a.py")]
+    # a final-answer JSON must not be mistaken for a tool call
+    assert extract_text_tool_calls('{"status": "done", "summary": "ok"}', allowed) == []
+    # unknown tools are ignored
+    assert extract_text_tool_calls('{"name": "rm_rf", "arguments": {}}', allowed) == []

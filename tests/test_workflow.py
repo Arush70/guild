@@ -54,9 +54,10 @@ def test_happy_path_accepts_and_documents(project, cfg, profile):
     assert "multiply" in (project / "app.py").read_text()
     assert "Has multiply" in (project / "README.md").read_text()
     assert out.task.status == "done" and out.task.branch.startswith("guild/t1-")
-    # real tests actually ran in the sandbox
-    ver_ev = [e for e in read_trace(g.trace.path) if e["kind"] == "tool_call" and e["tool"] == "run_tests"]
-    assert ver_ev and "passed" in ver_ev[-1]["result_preview"]
+    # real tests actually ran in the sandbox, without a model in the loop
+    ver_ev = [e for e in read_trace(g.trace.path) if e["kind"] == "verification"]
+    assert ver_ev and ver_ev[-1]["passed"] is True and ver_ev[-1]["tests_run"] == 2
+    assert not any(r == "verifier" for r, _ in fake.calls)
 
 
 def test_revision_round_then_escalation(project, cfg, profile):
@@ -144,3 +145,70 @@ def test_run_tasks_selected_ids_in_order(project, cfg, profile):
     g.close()
     assert [o.task.id for o in outs] == ["T3", "T1"]
     assert t3.status == "done" and t1.status == "done" and t2.status == "todo"
+
+
+def test_verification_detects_real_failure(project, cfg, profile):
+    # engineer "does" nothing but the repo now has a failing test → verification must fail
+    (project / "test_bad.py").write_text("def test_bad():\n    assert 1 == 2\n")
+    eng = [{"status": "done", "summary": "", "files_changed": [], "tests_run": "", "notes_for_reviewer": ""}] * 3
+    fake = FakeProvider({"engineer": eng, "critic": [APPROVE] * 3, "security": [APPROVE] * 3})
+    g = _guild(project, cfg, profile, fake)
+    plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
+    out = g.run_task(plan, plan.tasks[0])
+    g.close()
+    assert not out.accepted
+    assert out.verification["passed"] is False and any("test_bad" in f for f in out.verification["failures"])
+    assert "TESTS FAILED" in out.task.notes
+
+
+def test_text_tool_calls_are_executed(project, cfg, profile):
+    """Small models often write {"name": ..., "arguments": ...} as text. It must still run."""
+    from guild.providers.base import Completion, Message, Usage
+
+    class TextToolFake:
+        def __init__(self):
+            self.n = 0
+        def complete(self, model_name, messages, tools, max_tokens, temperature):
+            self.n += 1
+            if self.n == 1:
+                txt = 'Sure!\n{"name": "write_file", "arguments": {"path": "new.py", "content": "x = 1\\n"}}'
+            else:
+                txt = '{"status": "done", "summary": "wrote new.py", "files_changed": ["new.py"], "tests_run": "", "notes_for_reviewer": ""}'
+            return Completion(Message("assistant", txt), Usage(10, 5), f"fake/{model_name}", "stop")
+
+    g = Guild(project, cfg, profile)
+    g.router.register_provider("fake", TextToolFake())
+    res = g.agent("engineer").run("create new.py")
+    g.close()
+    assert (project / "new.py").read_text() == "x = 1\n"
+    assert res.data["status"] == "done"
+    ev = [e for e in read_trace(g.trace.path) if e["kind"] == "tool_call"]
+    assert ev and ev[0]["tool"] == "write_file" and ev[0]["ok"]
+
+
+def test_guild_metadata_never_in_commits_or_diff(project, cfg, profile):
+    fake = FakeProvider({"engineer": ENGINEER_GOOD, "critic": [APPROVE], "security": [APPROVE],
+                         "lead": [LEAD_ACCEPT], "docs": [DOCS[1]]})
+    g = _guild(project, cfg, profile, fake)
+    plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
+    g.save_plan(plan)
+    g.run_task(plan, plan.tasks[0])
+    g.close()
+    import subprocess
+    tracked = subprocess.run(["git", "ls-files"], cwd=project, capture_output=True, text=True).stdout
+    assert ".guild" not in tracked
+
+
+def test_selected_tasks_continue_after_failure(project, cfg, profile):
+    block = {"verdict": "block", "summary": "bad", "findings": []}
+    eng = [{"status": "done", "summary": "", "files_changed": [], "tests_run": "", "notes_for_reviewer": ""}] * 6
+    fake = FakeProvider({"engineer": eng, "critic": [APPROVE] * 6,
+                         "security": [block] * 3 + [APPROVE] * 3, "lead": [LEAD_ACCEPT], "docs": [DOCS[1]]})
+    g = _guild(project, cfg, profile, fake)
+    t1 = Task(id="T1", title="a", description="x")
+    t2 = Task(id="T2", title="b", description="y")
+    t3 = Task(id="T3", title="c", description="z", depends_on=["T1"])
+    plan = Plan(goal="g", roadmap=[], tasks=[t1, t2, t3])
+    outs = g.run_tasks(plan, ["T1", "T2", "T3"])
+    g.close()
+    assert [(o.task.id, o.accepted) for o in outs] == [("T1", False), ("T2", True)]  # T3 skipped: depends on T1
