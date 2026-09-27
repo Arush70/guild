@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -117,10 +118,14 @@ class Hub:
                 job.status = "error"
                 job.error = str(e)
                 self.publish({"kind": "job_error", "job": kind, "error": str(e)})
-            except Exception as e:  # noqa: BLE001 — surface anything to the UI
+            except Exception as e:  # noqa: BLE001 — surface anything to the UI, with a traceback
+                import traceback
+                tb = traceback.format_exc()
                 job.status = "error"
                 job.error = f"{type(e).__name__}: {e}"
-                self.publish({"kind": "job_error", "job": kind, "error": job.error})
+                print(tb, file=sys.stderr)
+                self.publish({"kind": "job_error", "job": kind, "error": job.error,
+                              "traceback": tb[-3000:]})
 
         threading.Thread(target=_run, daemon=True).start()
         return job

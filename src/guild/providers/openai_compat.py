@@ -132,7 +132,8 @@ class OpenAICompatProvider:
         stream = client.chat.completions.create(stream=True, stream_options={"include_usage": True}, **kwargs)
         for chunk in stream:
             if getattr(chunk, "usage", None):
-                usage = Usage(chunk.usage.prompt_tokens or 0, chunk.usage.completion_tokens or 0)
+                usage = Usage(getattr(chunk.usage, "prompt_tokens", 0) or 0,
+                              getattr(chunk.usage, "completion_tokens", 0) or 0)
             if not chunk.choices:
                 continue
             ch = chunk.choices[0]
@@ -141,20 +142,23 @@ class OpenAICompatProvider:
             delta = ch.delta
             if delta is None:
                 continue
-            if delta.content:
-                text_parts.append(delta.content)
-                on_token(delta.content)
-            for tc in delta.tool_calls or []:
-                slot = calls.setdefault(tc.index, {"id": "", "name": "", "args": ""})
-                if tc.id:
+            content = getattr(delta, "content", None)
+            if isinstance(content, str) and content:
+                text_parts.append(content)
+                on_token(content)
+            for n, tc in enumerate(delta.tool_calls or []):
+                idx = tc.index if getattr(tc, "index", None) is not None else n
+                slot = calls.setdefault(idx, {"id": "", "name": "", "args": ""})
+                if getattr(tc, "id", None):
                     slot["id"] = tc.id
-                if tc.function:
-                    if tc.function.name:
-                        slot["name"] += tc.function.name
-                    if tc.function.arguments:
-                        slot["args"] += tc.function.arguments
+                fn = getattr(tc, "function", None)
+                if fn is not None:
+                    if getattr(fn, "name", None):
+                        slot["name"] = (slot["name"] or "") + fn.name
+                    if getattr(fn, "arguments", None):
+                        slot["args"] = (slot["args"] or "") + fn.arguments
         tool_calls = [ToolCall(id=c["id"] or f"call_{i}", name=c["name"], arguments=parse_json_args(c["args"]))
-                      for i, c in sorted(calls.items()) if c["name"]]
+                      for i, c in sorted(calls.items(), key=lambda kv: kv[0]) if c["name"]]
         return Completion(message=Message(role="assistant", content="".join(text_parts), tool_calls=tool_calls),
                           usage=usage, model=full, stop_reason=finish)
 

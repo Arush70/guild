@@ -399,7 +399,7 @@ function onEvent(ev) {
     case 'job_error':
       liveClear();
       for (const r of ROLES) if (agentStats[r]?.state === 'active') setAgent(r, {state:'bad'});
-      logLine('job_error', `error: ${ev.error}`); refresh(); loadRuns(); break;
+      logLine('job_error', `error: ${ev.error}${ev.traceback ? '\n' + ev.traceback : ''}`); refresh(); loadRuns(); break;
   }
 }
 function connect() {
