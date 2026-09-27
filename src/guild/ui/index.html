@@ -143,6 +143,10 @@
 
   <!-- middle: plan -->
   <div class="col">
+    <div class="card hidden" id="gitWarn" style="border-color:var(--warn);color:var(--warn)">
+      <b>No git repository in this folder.</b> Guild will edit files directly — no branches, no diff/merge buttons, no way to undo.
+      Run <span class="mono">git init</span> in the project (then commit) to get the safe workflow.
+    </div>
     <div class="card">
       <h2>Goal</h2>
       <textarea id="goal" rows="2" placeholder="What should the team build? Keep it concrete: 'Add X with tests'"></textarea>
@@ -310,6 +314,7 @@ async function doctor() {
   try {
     const d = await api('/api/doctor?profile=' + encodeURIComponent($('#profile').value));
     let last = '';
+    $('#gitWarn').classList.toggle('hidden', !!d.git);
     $('#doctor').innerHTML = `<div class="small muted" style="margin-bottom:6px">${esc(d.profile.description)} · git: ${d.git?'<span class=ok>yes</span>':'<span class=no>no</span>'} · cap $${d.profile.limits.max_usd_per_run}/run</div>
       <table><tr><th>slot</th><th>model</th><th>status</th></tr>${d.rows.map(r => { const s = r.slot===last?'':r.slot; last=r.slot;
         return `<tr><td>${esc(s)}</td><td class="mono">${esc(r.model)}</td><td class="${r.ok?'ok':'no'} mono">${esc(r.status)}</td></tr>`; }).join('')}</table>`;

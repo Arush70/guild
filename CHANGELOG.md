@@ -12,6 +12,11 @@
 - docs: TROUBLESHOOTING.md, ADDING_A_ROLE.md.
 
 ## Unreleased
+- Engineer: a first "blocked" is pushed back once with the facts (missing files must be created; failing tests are the work); only a second block counts. Task brief lists files that don't exist yet.
+- `run selected` skips tasks whose dependencies aren't done, instead of running them out of order.
+- Verification: pytest "no tests collected" (exit 5) is not a failure.
+- `guild init` offers to `git init`; dashboard shows a warning when the project has no git repo.
+- Assistant always inspects files before answering.
 - Dashboard: project picker (browse folders / recent projects, switch live), Files panel with viewer, Chat with the read-only Assistant role (streaming, conversation memory), and "revise plan" by prompting.
 - New role: `assistant`. New workflow methods: `Guild.chat()`, `Guild.revise_plan()`.
 - Engineer that reports done without changing any file is asked again, then blocked (never falsely accepted).

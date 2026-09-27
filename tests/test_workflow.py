@@ -99,7 +99,7 @@ def test_fallback_chain_skips_failing_model(project, cfg, profile):
     out = g.run_task(plan, plan.tasks[0], roles=["engineer"])
     g.close()
     assert out.task.status == "blocked"
-    assert fake.calls == [("engineer", "small2")]
+    assert fake.calls[0] == ("engineer", "small2") and all(m == "small2" for _, m in fake.calls)
     assert any(e["kind"] == "fallback" for e in read_trace(g.trace.path))
 
 
@@ -302,3 +302,42 @@ def test_run_task_records_traceback_on_crash(project, cfg, profile, monkeypatch)
     err = [e for e in read_trace(g.trace.path) if e["kind"] == "error"]
     assert err and "boom" in err[0]["error"] and "verify" in err[0]["traceback"]
     assert plan.tasks[0].status == "todo" and "guild error" in plan.tasks[0].notes
+
+
+def test_false_block_is_pushed_back_and_recovers(project, cfg, profile):
+    """Engineer says 'blocked: app.py does not exist' → guild pushes back → it creates the file."""
+    (project / "app.py").unlink()  # empty-ish project: the task's file is missing
+    eng = [{"status": "blocked", "summary": "app.py does not exist"},
+           [("write_file", {"path": "app.py", "content": "def add(a, b):\n    return a + b\n\n\ndef multiply(a, b):\n    return a * b\n"}),
+            ("write_file", {"path": "test_multiply.py", "content": "from app import multiply\n\ndef test_multiply():\n    assert multiply(2, 3) == 6\n"})],
+           {"status": "done", "summary": "created app.py", "files_changed": ["app.py"], "tests_run": "ok", "notes_for_reviewer": ""}]
+    fake = FakeProvider({"engineer": eng, "critic": [APPROVE], "security": [APPROVE], "lead": [LEAD_ACCEPT], "docs": [DOCS[1]]})
+    g = _guild(project, cfg, profile, fake)
+    plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
+    out = g.run_task(plan, plan.tasks[0])
+    g.close()
+    assert out.accepted and (project / "app.py").exists()
+    # the brief told the engineer the file was missing, and the push-back happened once
+    notes = [e["msg"] for e in read_trace(g.trace.path) if e["kind"] == "note"]
+    assert any("pushing back" in m for m in notes)
+
+
+def test_pytest_no_tests_collected_is_not_a_failure(project, cfg, profile):
+    for f in ("test_app.py",):
+        (project / f).unlink()
+    g = Guild(project, cfg, profile)
+    v = g.verify()
+    g.close()
+    assert v["passed"] is True and v["tests_run"] == 0 and "no tests collected" in v["output_tail"]
+
+
+def test_selected_task_with_unfinished_dependency_is_skipped(project, cfg, profile):
+    fake = FakeProvider({"engineer": ENG_TOUCH * 2, "critic": [APPROVE] * 2, "security": [APPROVE] * 2,
+                         "lead": [LEAD_ACCEPT] * 2, "docs": [DOCS[1]] * 2})
+    g = _guild(project, cfg, profile, fake)
+    t1 = Task(id="T1", title="a", description="x")
+    t3 = Task(id="T3", title="c", description="z", depends_on=["T2"])  # T2 not done, not selected
+    plan = Plan(goal="g", roadmap=[], tasks=[t1, Task(id="T2", title="b", description="y"), t3])
+    outs = g.run_tasks(plan, ["T1", "T3"])
+    g.close()
+    assert [o.task.id for o in outs] == ["T1"] and t3.status == "todo"

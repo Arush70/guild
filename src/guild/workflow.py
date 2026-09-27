@@ -317,9 +317,15 @@ class Guild:
             if m.group(3):
                 failed_n += int(m.group(3))
         failures = [f"{m.group(2)}: {m.group(3) or ''}".strip(": ") for m in self._FAIL_LINE_RX.finditer(out)][:20]
+        no_tests = res.returncode == 5 and "pytest" in cmd  # pytest: "no tests collected"
+        if no_tests:
+            res.returncode = 0
+            tail_note = "(no tests collected)"
+        else:
+            tail_note = ""
         if res.returncode != 0 and not failures:
             failures = [f"{cmd} exited {res.returncode}"]
-        tail = "\n".join(out.strip().splitlines()[-25:])
+        tail = "\n".join(out.strip().splitlines()[-25:]) + ("\n" + tail_note if tail_note else "")
         result = {"passed": res.returncode == 0, "tests_run": passed_n + failed_n,
                   "failures": failures, "output_tail": tail, "command": cmd, "exit_code": res.returncode}
         if self.cfg.lint_command and res.returncode == 0:
@@ -356,9 +362,11 @@ class Guild:
         task.branch = self._start_branch(task)
         cost0 = self.tracker.total_usd
 
+        missing = [f for f in task.files if not (self.root / f).exists()]
         task_brief = (f"TASK {task.id}: {task.title}\n\n{task.description}\n\n"
                       f"Files likely involved: {', '.join(task.files) or 'unknown'}\n"
-                      f"Done when: {task.done_when}")
+                      + (f"NOTE: these files do not exist yet — CREATE them with write_file: {', '.join(missing)}\n" if missing else "")
+                      + f"Done when: {task.done_when}")
         project_ctx = {"Project goal": plan.goal, "Project": self.project_summary()}
 
         feedback = ""
@@ -367,6 +375,7 @@ class Guild:
         failed_rounds = 0
         accepted = False
         rounds = 0
+        pushed_back_on_block = False
 
         for rounds in range(1, limits.max_revision_rounds + 1):
             self._phase("implement", task_id=task.id, round=rounds, escalated=escalated)
@@ -392,6 +401,24 @@ class Guild:
                             summary=(eng.data or {}).get("summary", eng.raw[:300]))
             self._commit(f"guild({task.id}) round {rounds}: {task.title}")
 
+            if eng.data and eng.data.get("status") == "blocked" and not pushed_back_on_block:
+                # Small models block on trivial obstacles (a missing file, a failing test). Push back
+                # once with the facts; only a second "blocked" is taken at face value.
+                pushed_back_on_block = True
+                why = eng.data.get("summary", "")
+                self.trace.emit("note", role="engineer", msg=f"blocked once ({why[:120]}); pushing back")
+                self.report("warn", f"engineer says blocked ({why[:80]}…) — pushing back once")
+                eng = eng_agent.run(
+                    task_brief + "\n\nYou reported BLOCKED because: " + why
+                    + "\n\nThat is not a valid reason. Facts: a file that does not exist must be CREATED with "
+                      "write_file (this is normal for new projects). A failing or missing test must be fixed "
+                      "or written by you. You have all the tools you need. Implement the task now: create or "
+                      "edit the files, run run_tests, then reply with the final JSON. Use \"blocked\" only if "
+                      "a tool call literally fails and you can quote its error.",
+                    context_blocks=project_ctx)
+                if eng.data and eng.data.get("status") == "done" and not eng_agent.ctx.files_written:
+                    eng.data["status"] = "blocked"
+                    eng.data["summary"] = "engineer produced no file changes (after push-back)"
             if eng.data and eng.data.get("status") == "blocked":
                 task.status = "blocked"
                 task.notes = eng.data.get("summary", "")
@@ -483,8 +510,9 @@ class Guild:
                 task = plan.get(tid)
                 if task.status == "done":
                     continue
-                if any(d in failed for d in task.depends_on):
-                    self.report("warn", f"skipping {tid}: depends on a task that was not accepted")
+                not_done = [d for d in task.depends_on if d in failed or plan.get(d).status != "done"]
+                if not_done:
+                    self.report("warn", f"skipping {tid}: depends on {', '.join(not_done)} which is not done yet")
                     continue
                 out = self.run_task(plan, task, roles=roles)
                 outcomes.append(out)
