@@ -115,12 +115,14 @@ Reporter = Callable[[str, str], None]  # (level, message)
 
 class Guild:
     def __init__(self, root: Path, cfg: ProjectConfig, profile: Profile,
-                 report: Reporter | None = None, *, dry_run: bool = False):
+                 report: Reporter | None = None, *, dry_run: bool = False,
+                 on_token: Callable[[str, str], None] | None = None):
         self.root = root
         self.cfg = cfg
         self.profile = profile
         self.report = report or (lambda lvl, msg: None)
         self.dry_run = dry_run
+        self.on_token = on_token  # (role, chunk) — live streaming to a UI
         self.run_id = new_run_id()
         self.run_dir = root / GUILD_DIR / "runs" / self.run_id
         self.trace = Trace(self.run_dir / "trace.jsonl", self.run_id)
@@ -150,7 +152,8 @@ class Guild:
 
     def agent(self, name: str, *, escalate: bool = False) -> Agent:
         role = self.role(name)
-        return Agent(role, self.router, self._ctx(role), self.trace, escalate=escalate)
+        return Agent(role, self.router, self._ctx(role), self.trace, escalate=escalate,
+                     on_token=self.on_token)
 
     def _phase(self, name: str, **info: Any) -> None:
         self.trace.emit("phase", phase=name, **info)
@@ -179,7 +182,7 @@ class Guild:
         self._phase("plan", goal=goal)
         res = self.agent("lead").run(
             f"PLAN the following goal for this project.\n\nGOAL:\n{goal}\n\n{extra_context}".strip(),
-            context_blocks={"Project": self.project_summary()},
+            context_blocks={"Project": self.project_summary()}, job="plan",
         )
         if not res.ok:
             raise RuntimeError(f"Lead did not return a plan. Raw reply:\n{res.raw[:2000]}")
@@ -220,20 +223,31 @@ class Guild:
         return (self.root / ".git").is_dir()
 
     def _start_branch(self, task: Task) -> str | None:
+        """Create guild/<task> from the current HEAD. Only *modified tracked* files count as
+        dirty; pre-existing untracked files are tolerated and kept out of guild's commits."""
+        self._on_branch = False
+        self._pre_untracked = set()
         if not self._has_git() or self.dry_run:
             return None
         slug = "".join(c if c.isalnum() else "-" for c in task.title.lower())[:40].strip("-")
         branch = f"guild/{task.id.lower()}-{slug}"
-        if self._git("status", "--porcelain", "--", ".", f":(exclude){GUILD_DIR}", ":(exclude).gitignore"):
-            self.report("warn", "working tree is dirty; guild will not create a branch. Commit or stash first.")
+        if self._git("status", "--porcelain", "--untracked-files=no", "--", ".",
+                     f":(exclude){GUILD_DIR}", ":(exclude).gitignore"):
+            self.report("warn", "you have uncommitted changes to tracked files; guild will not create a "
+                                "branch and will NOT commit. Commit or stash first for a clean branch.")
             return None
+        self._pre_untracked = set(filter(None, self._git("ls-files", "--others", "--exclude-standard").splitlines()))
         self._git("checkout", "-B", branch, check=True)
+        self._on_branch = True
         return branch
 
     def _commit(self, message: str) -> None:
-        if not self._has_git() or self.dry_run:
+        # Never commit unless we are on a branch guild created — protects main/master.
+        if not self._has_git() or self.dry_run or not getattr(self, "_on_branch", False):
             return
         self._git("add", "-A", "--", ".", f":(exclude){GUILD_DIR}")
+        for f in getattr(self, "_pre_untracked", ()):
+            self._git("reset", "-q", "--", f)
         if self._git("diff", "--cached", "--quiet") == "" and self._git("diff", "--cached", "--stat") == "":
             return
         self._git("commit", "-q", "-m", message)
@@ -244,6 +258,46 @@ class Guild:
         excl = ["--", ".", f":(exclude){GUILD_DIR}"]
         return (self._git("diff", base or "HEAD~1", *excl) or self._git("diff", *excl)
                 or self._git("diff", "--cached", *excl) or "(no diff)")
+
+    # ------------------------------------------------------------------ branch helpers (for the UI / human)
+    def default_branch(self) -> str:
+        for cand in ("main", "master"):
+            if self._git("rev-parse", "--verify", "--quiet", cand):
+                return cand
+        return self._git("rev-parse", "--abbrev-ref", "HEAD") or "main"
+
+    def current_branch(self) -> str:
+        return self._git("rev-parse", "--abbrev-ref", "HEAD")
+
+    def branch_diff(self, branch: str, base: str | None = None) -> dict:
+        base = base or self.default_branch()
+        if not self._git("rev-parse", "--verify", "--quiet", branch):
+            return {"branch": branch, "base": base, "exists": False, "diff": "", "stat": ""}
+        rng = f"{base}...{branch}"
+        return {"branch": branch, "base": base, "exists": True,
+                "stat": self._git("diff", "--stat", rng, "--", ".", f":(exclude){GUILD_DIR}"),
+                "diff": self._git("diff", rng, "--", ".", f":(exclude){GUILD_DIR}"),
+                "commits": self._git("log", "--oneline", f"{base}..{branch}")}
+
+    def merge_branch(self, branch: str, base: str | None = None) -> dict:
+        """Merge a guild branch into the base branch. Refuses on a dirty tree or conflicts."""
+        base = base or self.default_branch()
+        if self._git("status", "--porcelain", "--", ".", f":(exclude){GUILD_DIR}", ":(exclude).gitignore"):
+            return {"ok": False, "error": "working tree is dirty; commit or stash first"}
+        self._git("checkout", "-q", base, check=True)
+        out = self._git("merge", "--no-ff", "-q", "-m", f"Merge {branch} (guild)", branch)
+        if "CONFLICT" in out or self._git("ls-files", "-u"):
+            self._git("merge", "--abort")
+            return {"ok": False, "error": f"merge conflict; resolve manually:\n{out}"}
+        self._git("branch", "-d", branch)
+        return {"ok": True, "base": base, "merged": branch, "output": out}
+
+    def discard_branch(self, branch: str) -> dict:
+        base = self.default_branch()
+        if self.current_branch() == branch:
+            self._git("checkout", "-q", base, check=True)
+        out = self._git("branch", "-D", branch)
+        return {"ok": "Deleted" in out or "deleted" in out, "output": out}
 
     # ------------------------------------------------------------------ verification
     _PYTEST_RX = re.compile(r"(\d+) passed|(\d+) failed|(\d+) error", re.I)
@@ -363,7 +417,7 @@ class Guild:
                 "REVIEW this task's outcome and decide.",
                 context_blocks={"Task": task_brief, "Diff": self._diff_text(base_ref)[:30000],
                                 "Verification": json.dumps(verification), "Critic": json.dumps(critic),
-                                "Security": json.dumps(security)})
+                                "Security": json.dumps(security)}, job="review")
             lead_decision = res.data or {"decision": "REVISE", "notes": "lead returned no JSON"}
             self.trace.emit("decision", role="lead", decision=lead_decision.get("decision"),
                             notes=lead_decision.get("notes", ""))

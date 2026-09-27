@@ -63,6 +63,22 @@
   .muted { color: var(--muted) } .small { font-size: 12px }
   .tabs { display: flex; gap: 4px; margin-bottom: 8px } .tabs button { padding: 4px 10px; font-size: 12px } .tabs button.on { border-color: var(--accent); color: var(--accent) }
   .hidden { display: none !important }
+  /* live stream */
+  .live { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto; margin-top: 8px }
+  .live .who { color: var(--accent); font-weight: 600; margin-right: 6px }
+  .live .cursor { display: inline-block; width: 7px; height: 12px; background: var(--accent); animation: pulse .8s infinite; vertical-align: -2px }
+  /* modal */
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px }
+  .modal .box { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; width: min(1100px, 100%); max-height: 90vh; display: flex; flex-direction: column }
+  .modal .head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line) }
+  .modal .head h3 { margin: 0; font-size: 14px; flex: 1 }
+  .modal .body { overflow: auto; padding: 12px 14px }
+  pre.diff { font-family: var(--mono); font-size: 12px; margin: 0; white-space: pre; overflow: auto }
+  pre.diff .add { color: var(--ok) } pre.diff .del { color: var(--err) } pre.diff .hunk { color: var(--accent) } pre.diff .meta { color: var(--muted) }
+  .tl { display: grid; grid-template-columns: 70px 90px 1fr; gap: 2px 10px; font-family: var(--mono); font-size: 12px }
+  .tl .t { color: var(--muted) } .tl .r { font-weight: 600 } .tl .phase { color: var(--accent); font-weight: 600; grid-column: 2 / span 2 }
+  .tl .bad { color: var(--err) } .tl .ok { color: var(--ok) } .tl .warn { color: var(--warn) }
+  .runrow { cursor: pointer } .runrow:hover { background: var(--panel2) }
   .result { background: var(--panel2); border-radius: 8px; padding: 10px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; max-height: 300px; overflow: auto }
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12px } .kv b { color: var(--muted); font-weight: 500 }
   .busy header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: slide 1.2s linear infinite }
@@ -130,6 +146,7 @@
     <div class="card grow">
       <div class="row" style="justify-content:space-between"><h2 style="margin:0">Activity</h2>
         <span><label class="small muted"><input type="checkbox" id="showTools" checked> tools</label> <button id="btnClear" class="small">clear</button></span></div>
+      <div class="live hidden" id="live"><span class="who" id="liveWho"></span><span id="liveText"></span><span class="cursor"></span></div>
       <div class="scroll log" id="log" style="margin-top:8px"></div>
     </div>
     <div class="card" id="doctorCard">
@@ -138,6 +155,7 @@
     </div>
   </div>
 </main>
+<div id="modal" class="modal hidden"><div class="box"><div class="head"><h3 id="modalTitle"></h3><span id="modalActs"></span><button id="modalClose">close</button></div><div class="body" id="modalBody"></div></div></div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -180,6 +198,7 @@ function renderPlan(plan, warnings) {
         <button data-act="done" ${t.status==='done'?'disabled':''}>mark done</button>
         <button data-act="edit">edit</button>
         <button data-act="delete">delete</button>
+        ${t.branch ? `<button data-act="diff" title="review the branch">diff</button>${t.merged ? '<span class="pill done">merged</span>' : `<button data-act="merge" class="primary" title="merge branch into main/master">merge</button><button data-act="discard" title="delete the branch">discard</button>`}` : ''}
       </div>
     </div>`).join('');
   if (plan.risks?.length) h += `<div class="small muted" style="margin-top:8px"><b>Risks</b><ul style="margin:4px 0 0 18px;padding:0">${plan.risks.map(r=>`<li>${esc(r)}</li>`).join('')}</ul></div>`;
@@ -193,6 +212,11 @@ function updateSel() { const n = selectedIds().length; const b = $('#btnRunSel')
 async function taskAction(id, act) {
   try {
     if (act === 'run') return startRun(id, false);
+    if (act === 'diff') return showDiff(id);
+    if (act === 'merge') { if (!confirm(`Merge ${id}'s branch into your main branch?`)) return;
+      const r = await api(`/api/branches/${id}/merge`, {}); if (!r.ok) alert(r.error); await refresh(); return; }
+    if (act === 'discard') { if (!confirm(`Delete ${id}'s branch? Its changes will be lost.`)) return;
+      const r = await api(`/api/branches/${id}/discard`, {}); if (!r.ok) alert(r.output); await refresh(); return; }
     if (act === 'delete') { if (!confirm(`Delete ${id}?`)) return; renderPlan(await api('/api/plan/task', {id, delete:true})); return; }
     if (act === 'edit') {
       const t = state.plan.tasks.find(t => t.id === id);
@@ -266,14 +290,59 @@ async function doctor() {
   } catch (e) { $('#doctor').innerHTML = `<span class="no">${esc(e.message)}</span>`; }
 }
 
+// ---------- modal
+function openModal(title, bodyHtml, actsHtml='') { $('#modalTitle').textContent = title; $('#modalBody').innerHTML = bodyHtml; $('#modalActs').innerHTML = actsHtml; $('#modal').classList.remove('hidden'); }
+$('#modalClose').onclick = () => $('#modal').classList.add('hidden');
+$('#modal').onclick = e => { if (e.target.id === 'modal') $('#modal').classList.add('hidden'); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape') $('#modal').classList.add('hidden'); });
+function renderDiff(d) {
+  return d.split('\n').map(l => { const c = l.startsWith('+++')||l.startsWith('---')||l.startsWith('diff ')||l.startsWith('index ') ? 'meta' : l.startsWith('+') ? 'add' : l.startsWith('-') ? 'del' : l.startsWith('@@') ? 'hunk' : ''; return `<span class="${c}">${esc(l)}</span>`; }).join('\n');
+}
+async function showDiff(id) {
+  try {
+    const d = await api(`/api/branches/${id}/diff`);
+    if (!d.exists) return openModal(`${id} — branch missing`, `<div class="muted">branch ${esc(d.branch)} no longer exists</div>`);
+    openModal(`${id} — ${d.branch} vs ${d.base}`,
+      `<div class="small muted" style="margin-bottom:8px">${esc(d.commits||'').replace(/\n/g,'<br>')}</div><pre class="small muted" style="margin:0 0 8px">${esc(d.stat)}</pre><pre class="diff">${renderDiff(d.diff || '(no changes)')}</pre>`,
+      `<button id="mMerge" class="primary">merge</button> <button id="mDiscard">discard</button>`);
+    $('#mMerge').onclick = () => { $('#modal').classList.add('hidden'); taskAction(id, 'merge'); };
+    $('#mDiscard').onclick = () => { $('#modal').classList.add('hidden'); taskAction(id, 'discard'); };
+  } catch (e) { logLine('job_error', e.message); }
+}
+async function showRun(id) {
+  try {
+    const d = await api(`/api/runs/${id}`);
+    const t0 = d.started;
+    const rows = d.events.map(e => {
+      const t = `<span class="t">+${(e.ts - t0).toFixed(1)}s</span>`;
+      switch (e.kind) {
+        case 'phase': return `${t}<span class="phase">▶ ${esc(e.phase)}${e.task_id?' '+esc(e.task_id):''}${e.round?' r'+e.round:''}</span>`;
+        case 'model_call': return `${t}<span class="r">${esc(e.role)}</span><span>${esc(e.model)} · ${e.input_tokens}→${e.output_tokens} tok · ${e.latency_s}s${e.usd?' · $'+e.usd:''}${e.n_tool_calls?' · '+e.n_tool_calls+' tools':''}${!e.n_tool_calls&&e.content_preview?'<br><span class="muted">'+esc(e.content_preview.slice(0,160))+'</span>':''}</span>`;
+        case 'tool_call': return `${t}<span class="r muted">${esc(e.role)}</span><span class="${e.ok?'muted':'bad'}">${esc(e.tool)}(${esc(Object.entries(e.args||{}).map(([k,v])=>k+'='+JSON.stringify(v).slice(0,40)).join(', '))}) → ${esc(String(e.result_preview).slice(0,100).replace(/\n/g,' ⏎ '))}</span>`;
+        case 'verification': return `${t}<span class="r">tests</span><span class="${e.passed?'ok':'bad'}">${e.passed?'PASS':'FAIL'} (${e.tests_run} run)${e.failures?.length?' — '+esc(e.failures.slice(0,3).join('; ')):''}</span>`;
+        case 'decision': return `${t}<span class="r">${esc(e.role)}</span><span class="warn">${esc(e.decision||e.status||'')} ${esc((e.notes||e.summary||'').slice(0,160))}</span>`;
+        case 'fallback': return `${t}<span class="r">router</span><span class="warn">fallback: ${esc(e.model)} — ${esc(e.reason)}</span>`;
+        case 'note': return `${t}<span class="r muted">${esc(e.role||'')}</span><span class="muted">${esc(e.msg)}</span>`;
+        case 'task_end': return `${t}<span class="r">task</span><span class="${e.accepted?'ok':'bad'}">${esc(e.task_id)} ${e.accepted?'ACCEPTED':'not accepted'} · ${e.rounds} rounds · $${e.cost_usd}</span>`;
+        case 'run_start': return `${t}<span class="r">run</span><span class="muted">profile ${esc(e.profile)}</span>`;
+        case 'run_end': return `${t}<span class="r">run</span><span class="ok">finished · $${e.total_usd}</span>`;
+        default: return '';
+      }
+    }).filter(Boolean).join('');
+    const roles = Object.entries(d.by_role).map(([r, v]) => `<tr><td>${esc(r)}</td><td>${v.calls}</td><td>${v.input_tokens.toLocaleString()}</td><td>${v.output_tokens.toLocaleString()}</td><td>${v.latency_s}s</td><td>$${v.usd}</td><td class="mono">${esc(v.models.join(', '))}</td></tr>`).join('');
+    openModal(`run ${id}`, `<table style="margin-bottom:12px"><tr><th>role</th><th>calls</th><th>in</th><th>out</th><th>time</th><th>USD</th><th>models</th></tr>${roles}</table><div class="tl">${rows}</div>`);
+  } catch (e) { logLine('job_error', e.message); }
+}
+
 // ---------- runs
 async function loadRuns() {
   try {
     const runs = await api('/api/runs');
     const total = runs.reduce((a, r) => a + r.usd, 0);
     $('#runs').innerHTML = runs.length ? `<div class="small muted" style="margin-bottom:6px">est. total $${total.toFixed(4)} over ${runs.length} runs</div>` +
-      runs.map(r => `<div class="kv" style="padding:6px 0;border-bottom:1px solid var(--line)"><b>${esc(r.id)}</b><span>${esc(r.profile)} · ${r.calls} calls · ${(r.input_tokens+r.output_tokens).toLocaleString()} tok · $${r.usd}</span><b>phases</b><span class="muted">${esc(r.phases.join(' › '))}</span></div>`).join('')
+      runs.map(r => `<div class="kv runrow" data-run="${esc(r.id)}" style="padding:6px 0;border-bottom:1px solid var(--line)"><b>${esc(r.id)}</b><span>${esc(r.profile)} · ${r.calls} calls · ${(r.input_tokens+r.output_tokens).toLocaleString()} tok · $${r.usd}</span><b>phases</b><span class="muted">${esc(r.phases.join(' › '))}</span></div>`).join('')
       : '<div class="muted small">no runs yet</div>';
+    $('#runs').querySelectorAll('.runrow').forEach(el => el.onclick = () => showRun(el.dataset.run));
   } catch (e) { $('#runs').innerHTML = `<span class="no small">${esc(e.message)}</span>`; }
 }
 
@@ -286,8 +355,17 @@ function logLine(cls, text) {
   log.appendChild(d); if (log.children.length > 800) log.removeChild(log.firstChild);
   if (stick) log.scrollTop = log.scrollHeight;
 }
+let liveRole = '';
+function liveAppend(role, text) {
+  const el = $('#live');
+  if (liveRole !== role) { liveRole = role; $('#liveText').textContent = ''; $('#liveWho').textContent = role; }
+  el.classList.remove('hidden');
+  const t = $('#liveText'); t.textContent = (t.textContent + text).slice(-4000); el.scrollTop = el.scrollHeight;
+}
+function liveClear() { $('#live').classList.add('hidden'); $('#liveText').textContent = ''; liveRole = ''; }
 function onEvent(ev) {
   switch (ev.kind) {
+    case 'token': liveAppend(ev.role, ev.text); return;
     case 'phase': {
       const who = {plan:'lead', implement:'engineer', verify:'verifier', critique:'critic', security:'security', lead_review:'lead', docs:'docs', ask: ev.role}[ev.phase];
       for (const r of ROLES) if (agentStats[r]?.state === 'active') setAgent(r, {state:'done'});
@@ -295,6 +373,7 @@ function onEvent(ev) {
       logLine('phase', `▶ ${ev.phase}${ev.task_id?' '+ev.task_id:''}${ev.round?' round '+ev.round:''}${ev.escalated?' (escalated)':''}${ev.goal?': '+ev.goal:''}`);
       break; }
     case 'model_call':
+      liveClear();
       setAgent(ev.role, {model: ev.model, calls: (agentStats[ev.role]?.calls||0)+1});
       logLine('model_call', `${ev.role} ← ${ev.model}  ${ev.input_tokens}→${ev.output_tokens} tok  ${ev.latency_s}s${ev.usd?'  $'+ev.usd:''}${ev.n_tool_calls?'  ('+ev.n_tool_calls+' tool calls)':''}${ev.content_preview && !ev.n_tool_calls ? '\n' + ev.content_preview.slice(0,200) : ''}`);
       break;
@@ -311,11 +390,14 @@ function onEvent(ev) {
     case 'task_end':
       logLine(ev.accepted?'job_done':'job_error', `task ${ev.task_id} ${ev.accepted?'ACCEPTED':'not accepted'} · ${ev.rounds} round(s)${ev.escalated?' · escalated':''} · $${ev.cost_usd}${ev.branch?' · branch '+ev.branch+' — review & merge it':''}`); break;
     case 'run_end': logLine('job_done', `run finished · $${ev.total_usd}`); break;
+    case 'note': logLine('report info', `${ev.role||''}: ${ev.msg}`); break;
     case 'job_done':
+      liveClear();
       for (const r of ROLES) if (agentStats[r]?.state === 'active') setAgent(r, {state:'done'});
       if (ev.job === 'ask' && ev.result) { $('#askOut').textContent = JSON.stringify(ev.result.data ?? ev.result.raw, null, 2); $('#askOut').classList.remove('hidden'); }
       refresh(); loadRuns(); break;
     case 'job_error':
+      liveClear();
       for (const r of ROLES) if (agentStats[r]?.state === 'active') setAgent(r, {state:'bad'});
       logLine('job_error', `error: ${ev.error}`); refresh(); loadRuns(); break;
   }
