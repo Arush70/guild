@@ -108,11 +108,21 @@ Everything the CLI does, in a browser tab, plus the parts a CLI can't do well:
 
 Binds to localhost only; nothing to deploy.
 
+## Project docs: give the team context
+
+`guild init --docs` scaffolds `docs/PRD.md`, `docs/ARCHITECTURE.md`, `RULES.md`, `TASKS.md`,
+`docs/MEMORY.md` and `docs/DECISIONS.md` in your project (nothing existing is overwritten).
+Fill in the PRD at least. Every role reads whichever of these exist: the Lead stays inside
+the PRD's scope and continues from TASKS/MEMORY; the Engineer follows ARCHITECTURE and RULES;
+the Docs role ticks TASKS and updates MEMORY after each accepted task. `CLAUDE.md` and
+`.cursorrules` are picked up as rules too, so a repo set up for Claude Code or Cursor works
+as-is.
+
 ## Commands
 
 | command | what it does |
 |---|---|
-| `guild init [path] --profile P` | create `.guild/` with config; adds `.guild/runs/` to `.gitignore` |
+| `guild init [path] [--profile P] [--docs] [-y]` | wizard: hardware → profile, test runner, git init, optional project docs |
 | `guild doctor` | check every model in the active profile: reachable / key set / not pulled |
 | `guild plan "goal" [--context brief.md]` | Lead writes roadmap + tasks → `.guild/plan.json` |
 | `guild status` | show the plan and task states |

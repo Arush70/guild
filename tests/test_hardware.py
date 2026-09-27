@@ -64,8 +64,18 @@ def test_init_wizard_noninteractive(tmp_path: Path, monkeypatch):
 
 def test_init_wizard_interactive_answers(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(hw, "detect", lambda: _machine(vram=8, keys={"anthropic": True}))
-    r = CliRunner().invoke(app, ["init", str(tmp_path)], input="lite\npython -m pytest -q\ny\n")
+    r = CliRunner().invoke(app, ["init", str(tmp_path)], input="lite\npython -m pytest -q\ny\nn\n")
     assert r.exit_code == 0, r.output
     assert "profile: lite" in (tmp_path / ".guild" / "config.yaml").read_text()
     assert (tmp_path / ".guild" / "profiles" / "lite.yaml").exists()
     assert (tmp_path / ".git").is_dir()  # offered and accepted git init
+
+
+def test_init_scaffolds_docs_without_overwriting(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(hw, "detect", lambda: _machine(vram=8))
+    (tmp_path / "TASKS.md").write_text("# mine\n")
+    r = CliRunner().invoke(app, ["init", str(tmp_path), "-y", "--docs"])
+    assert r.exit_code == 0, r.output
+    assert (tmp_path / "docs" / "PRD.md").exists() and (tmp_path / "RULES.md").exists()
+    assert (tmp_path / "TASKS.md").read_text() == "# mine\n"  # not overwritten
+    assert "created:" in r.output and "TASKS.md" not in r.output.split("created:")[1].split("\n")[0]
