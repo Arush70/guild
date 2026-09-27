@@ -1,5 +1,19 @@
 # CLAUDE.md — context for Claude Code working on this repo
 
+## Read these first, in this order (do not modify anything until you have)
+
+1. `docs/PRD.md` — what guild is and the v1.0 success criteria
+2. `docs/ARCHITECTURE.md` — modules, data flow, architectural rules
+3. `RULES.md` — how to change this repo (lint/tests/safety model/small-model tolerance)
+4. `TASKS.md` — what to do next, in order; one task per session
+5. `docs/MEMORY.md` — current state, what the last real run showed, known issues
+6. `docs/DECISIONS.md` — permanent decisions; add an ADR before changing any of them
+7. `docs/TEST_PLAN.md`, `docs/SECURITY.md`, `docs/DESIGN.md` as needed
+
+Then: state your understanding and the plan for the current TASK before writing code.
+After every task: `ruff check src tests && pytest -q`, commit, tick `TASKS.md`, update
+`docs/MEMORY.md` and `CHANGELOG.md`.
+
 ## What guild is
 
 A budget-aware multi-agent coding team, run from the CLI (`guild ...`) or a local dashboard
@@ -36,8 +50,9 @@ src/guild/
                       /api/fs folder picker, /api/files + /api/file browser, /api/chat, /api/plan/revise;
                       branch diff/merge/discard; run detail with per-role cost.  ui/index.html  single-file dashboard, no build step
   data/roles/*.yaml   lead engineer critic security docs researcher performance kaggle assistant(chat, prose)
+  data/templates/*.md PRD/ARCHITECTURE/RULES/TASKS/MEMORY/DECISIONS scaffolds for `guild init --docs`
   data/profiles/*.yaml free lite pro (guild init writes a machine-specific override into .guild/profiles/)
-tests/                56 tests; FakeProvider in conftest.py scripts model replies, no API calls;
+tests/                61 tests; FakeProvider in conftest.py scripts model replies, no API calls;
                       test_robustness.py (schemas/repair/streaming), test_hardware.py (init wizard)
 ```
 
@@ -59,6 +74,9 @@ tests/                56 tests; FakeProvider in conftest.py scripts model replie
 - Branch safety: `_commit` is a no-op unless `_start_branch` succeeded; dirty = modified
   tracked files only; pre-existing untracked files are excluded from guild's commits.
 - Providers accept `on_token` for streaming; Router passes it through; Hub.token() coalesces.
+- `Guild.project_docs()` feeds a project's PRD/ARCHITECTURE/RULES/TASKS/MEMORY/DECISIONS/DESIGN
+  (when present) into every role's context via `project_summary()`. Lead/engineer/docs prompts
+  say to obey them and keep MEMORY/TASKS updated.
 - Add features as new roles/profiles (YAML) before adding code. New OpenAI-compatible
   providers are one line in `providers/openai_compat.py::ENDPOINTS`.
 
@@ -96,6 +114,13 @@ and fix whatever the 7b model trips on. Expect prompt/parsing tweaks, not archit
 6. VS Code extension (the dashboard HTTP API is the integration point).
 Done in 0.2.0: streaming, trace viewer, diff/merge, init wizard, output validation, kaggle +
 performance roles, `guild watch`, GitHub Action, troubleshooting docs.
+
+## Suggested first prompt for a new Claude Code session
+
+> Read CLAUDE.md, then docs/PRD.md, docs/ARCHITECTURE.md, RULES.md, TASKS.md and
+> docs/MEMORY.md. Do not modify anything yet. Summarise the product, the architecture, the
+> rules, and the current state in your own words, list anything missing or contradictory,
+> and explain your implementation plan for the first unticked task in TASKS.md. Then wait.
 
 ## Commands you will use
 

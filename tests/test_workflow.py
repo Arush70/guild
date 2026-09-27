@@ -341,3 +341,22 @@ def test_selected_task_with_unfinished_dependency_is_skipped(project, cfg, profi
     outs = g.run_tasks(plan, ["T1", "T3"])
     g.close()
     assert [o.task.id for o in outs] == ["T1"] and t3.status == "todo"
+
+
+def test_project_docs_reach_the_lead(project, cfg, profile):
+    (project / "docs").mkdir()
+    (project / "docs" / "PRD.md").write_text("# PRD\n\n## Out of scope\n- payments\n")
+    (project / "RULES.md").write_text("# Rules\n- use type hints\n")
+    seen = {}
+
+    class Spy(FakeProvider):
+        def complete(self, model_name, messages, tools, max_tokens, temperature, on_token=None):
+            seen["ctx"] = "\n".join(m.content for m in messages if m.role == "user")
+            return super().complete(model_name, messages, tools, max_tokens, temperature)
+
+    fake = Spy({"lead": [PLAN]})
+    g = _guild(project, cfg, profile, fake)
+    g.plan("add multiply")
+    g.close()
+    assert "PRD (docs/PRD.md)" in seen["ctx"] and "payments" in seen["ctx"]
+    assert "Rules (RULES.md)" in seen["ctx"] and "type hints" in seen["ctx"]

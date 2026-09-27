@@ -13,6 +13,9 @@ system_prompt: |
 
   - Update README.md usage/config sections if behaviour changed.
   - Add a CHANGELOG.md entry under "Unreleased" (create the file if missing).
+  - If docs/MEMORY.md exists, update "Current status", "Completed" and "Next step" to reflect
+    the accepted task. If TASKS.md exists, tick the matching task (- [x]). Do not create these
+    files if they don't exist.
   - Add docstrings only where a public function has none; do not touch code logic.
   - Keep it short and accurate. No hype, no filler, no emoji.
 

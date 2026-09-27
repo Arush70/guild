@@ -165,6 +165,31 @@ class Guild:
         self.trace.close()
 
     # ------------------------------------------------------------------ project context
+    # Project documents that, when present, are handed to every role as context
+    # (PRD/architecture/rules/tasks/memory/decisions — the "structured vibe coding" set).
+    PROJECT_DOCS = (
+        ("PRD", ("docs/PRD.md", "PRD.md")),
+        ("Architecture", ("docs/ARCHITECTURE.md", "ARCHITECTURE.md")),
+        ("Rules", ("RULES.md", "docs/RULES.md", "CLAUDE.md", ".cursorrules")),
+        ("Tasks", ("TASKS.md", "docs/TASKS.md")),
+        ("Memory", ("docs/MEMORY.md", "MEMORY.md")),
+        ("Decisions", ("docs/DECISIONS.md", "DECISIONS.md")),
+        ("Design", ("docs/DESIGN.md", "DESIGN.md")),
+    )
+
+    def project_docs(self, per_doc_chars: int = 3000) -> dict[str, str]:
+        """Return {label: content} for the project docs that exist (first match per label)."""
+        out: dict[str, str] = {}
+        for label, candidates in self.PROJECT_DOCS:
+            for rel in candidates:
+                p = self.root / rel
+                if p.is_file():
+                    txt = p.read_text(encoding="utf-8", errors="replace").strip()
+                    if txt:
+                        out[f"{label} ({rel})"] = txt[:per_doc_chars] + ("\n…(truncated)" if len(txt) > per_doc_chars else "")
+                    break
+        return out
+
     def project_summary(self, max_files: int = 200) -> str:
         from .tools.registry import list_files
         ctx = self._ctx(self.role("lead"))
@@ -175,7 +200,10 @@ class Guild:
             if p.exists():
                 readme = p.read_text(encoding="utf-8", errors="replace")[:4000]
                 break
-        return f"Files:\n{listing}\n\nREADME (truncated):\n{readme or '(none)'}"
+        parts = [f"Files:\n{listing}", f"README (truncated):\n{readme or '(none)'}"]
+        for label, txt in self.project_docs().items():
+            parts.append(f"{label}:\n{txt}")
+        return "\n\n".join(parts)
 
     # ------------------------------------------------------------------ plan
     def plan(self, goal: str, extra_context: str = "") -> Plan:
