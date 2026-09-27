@@ -135,12 +135,16 @@ class Agent:
         return comp
 
     def run(self, user_prompt: str, *, context_blocks: dict[str, str] | None = None,
-            job: str = "default") -> AgentResult:
+            job: str = "default", prior: list[Message] | None = None,
+            expect_json: bool = True) -> AgentResult:
         messages: list[Message] = [Message("system", self.role.system_prompt)]
         if context_blocks:
             ctx_text = "\n\n".join(f"### {k}\n{v}" for k, v in context_blocks.items() if v)
             messages.append(Message("user", f"Context:\n\n{ctx_text}"))
             messages.append(Message("assistant", "Understood. Waiting for the task."))
+        for m in prior or []:  # earlier conversation turns (chat)
+            if m.role in ("user", "assistant") and not m.tool_calls:
+                messages.append(Message(m.role, m.content))
         messages.append(Message("user", user_prompt))
 
         tools = specs_for(self.role.tools) if self.role.tools else None
@@ -190,6 +194,11 @@ class Agent:
                 self.trace.tool_call(role=self.role.name, tool=tc.name, args=tc.arguments,
                                      result_preview=result, ok=ok)
                 messages.append(Message("tool", result, tool_call_id=tc.id, name=tc.name))
+
+        if not expect_json:
+            return AgentResult(role=self.role.name, model=model_used, raw=last_text,
+                               data={"text": last_text}, tool_calls=self.ctx.tool_calls_made,
+                               escalated=self.escalate, history=messages)
 
         # ---- final reply: parse, validate against the role's contract, repair if needed
         data, error = self._parse_and_validate(last_text, job)

@@ -173,6 +173,7 @@ SCHEMAS: dict[str, dict[str, type[BaseModel]]] = {
     "docs": {"default": DocsOutput},
     "researcher": {"default": ResearchOutput},
     "kaggle": {"default": PlanOutput},
+    # "assistant" deliberately absent: free-form prose
 }
 
 

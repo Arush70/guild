@@ -79,6 +79,18 @@
   .tl .t { color: var(--muted) } .tl .r { font-weight: 600 } .tl .phase { color: var(--accent); font-weight: 600; grid-column: 2 / span 2 }
   .tl .bad { color: var(--err) } .tl .ok { color: var(--ok) } .tl .warn { color: var(--warn) }
   .runrow { cursor: pointer } .runrow:hover { background: var(--panel2) }
+  /* chat */
+  .chat { display: flex; flex-direction: column; gap: 8px }
+  .msg { padding: 8px 10px; border-radius: 10px; font-size: 13px; white-space: pre-wrap; word-break: break-word; max-width: 95% }
+  .msg.user { background: color-mix(in srgb, var(--accent) 18%, var(--panel2)); align-self: flex-end }
+  .msg.assistant { background: var(--panel2); align-self: flex-start }
+  .msg .m { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; font-family: var(--mono) }
+  /* files */
+  .ftree { font-family: var(--mono); font-size: 12px } .ftree div { padding: 2px 4px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis } .ftree div:hover { background: var(--panel2) }
+  .ftree .dir { color: var(--muted) }
+  pre.code { font-family: var(--mono); font-size: 12px; margin: 0; white-space: pre; overflow: auto; tab-size: 4 }
+  pre.code .ln { color: var(--muted); display: inline-block; width: 44px; text-align: right; margin-right: 12px; user-select: none }
+  .picker div.d { padding: 5px 8px; cursor: pointer; border-radius: 6px; font-family: var(--mono); font-size: 12px } .picker div.d:hover { background: var(--panel2) }
   .result { background: var(--panel2); border-radius: 8px; padding: 10px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; max-height: 300px; overflow: auto }
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12px } .kv b { color: var(--muted); font-weight: 500 }
   .busy header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: slide 1.2s linear infinite }
@@ -89,7 +101,7 @@
 <body>
 <header>
   <h1>guild</h1>
-  <span class="root" id="root"></span>
+  <button class="root" id="root" title="click to switch project" style="text-align:left;background:none;border:1px dashed var(--line);cursor:pointer"></button>
   <label class="small muted">profile
     <select id="profile"></select>
   </label>
@@ -104,16 +116,26 @@
       <h2>Team</h2>
       <div id="team"></div>
     </div>
-    <div class="card">
-      <h2>Ask a role</h2>
-      <div class="row" style="margin-bottom:6px">
-        <select id="askRole"></select>
-      </div>
-      <textarea id="askQ" rows="3" placeholder="e.g. Where does this app store user data?"></textarea>
-      <div class="row" style="margin-top:6px"><button id="btnAsk">ask</button></div>
-      <div id="askOut" class="result hidden" style="margin-top:8px"></div>
-    </div>
     <div class="card grow">
+      <div class="tabs"><button class="on" data-tab="chat">Chat</button><button data-tab="files">Files</button><button data-tab="ask">Ask a role</button></div>
+      <div id="tab-chat" class="grow" style="min-height:0">
+        <div class="scroll chat" id="chatLog" style="flex:1;min-height:120px"></div>
+        <textarea id="chatQ" rows="2" placeholder="Ask about the code, the plan, what the team did… (Enter to send, Shift+Enter for newline)" style="margin-top:8px"></textarea>
+        <div class="row" style="margin-top:6px"><button class="primary" id="btnChat">send</button><button id="btnChatClear" class="small">clear</button></div>
+      </div>
+      <div id="tab-files" class="grow hidden" style="min-height:0">
+        <input id="fileFilter" placeholder="filter files…" style="width:100%;margin-bottom:6px">
+        <div class="scroll ftree" id="ftree" style="flex:1"></div>
+        <div class="small muted" id="fileCount" style="margin-top:4px"></div>
+      </div>
+      <div id="tab-ask" class="hidden">
+        <div class="row" style="margin-bottom:6px"><select id="askRole"></select></div>
+        <textarea id="askQ" rows="3" placeholder="e.g. security: where does this app store user data?"></textarea>
+        <div class="row" style="margin-top:6px"><button id="btnAsk">ask</button></div>
+        <div id="askOut" class="result hidden" style="margin-top:8px"></div>
+      </div>
+    </div>
+    <div class="card" style="max-height:220px;display:flex;flex-direction:column">
       <h2>Runs &amp; cost</h2>
       <div class="scroll" id="runs"></div>
     </div>
@@ -137,7 +159,11 @@
     </div>
     <div class="card grow">
       <h2>Plan</h2>
-      <div class="scroll" id="plan"><div class="muted">No plan yet. Enter a goal and press <b>plan</b>.</div></div>
+      <div class="scroll" id="plan" style="flex:1"><div class="muted">No plan yet. Enter a goal and press <b>plan</b>.</div></div>
+      <div class="row" style="margin-top:8px" id="reviseRow">
+        <input id="reviseQ" placeholder="revise the plan by prompting: e.g. 'split T2 into two tasks and add input validation'" style="flex:1">
+        <button id="btnRevise">revise plan</button>
+      </div>
     </div>
   </div>
 
@@ -165,7 +191,7 @@ const api = async (path, body) => {
   return r.json();
 };
 const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-const ROLES = ['lead','engineer','verifier','critic','security','docs','researcher'];
+const ROLES = ['lead','engineer','verifier','critic','security','docs','researcher','assistant'];
 let state = null, agentStats = {};
 
 // ---------- team panel
@@ -245,7 +271,7 @@ async function refresh() {
 }
 function setBusy(b, job) {
   document.body.classList.toggle('busy', b);
-  ['#btnPlan','#btnRunNext','#btnRunAll','#btnAsk'].forEach(s => $(s).disabled = b);
+  ['#btnPlan','#btnRunNext','#btnRunAll','#btnAsk','#btnChat','#btnRevise'].forEach(s => $(s).disabled = b);
   updateSel();
   $('#jobState').textContent = b ? `running: ${job?.kind}…` : '';
 }
@@ -289,6 +315,94 @@ async function doctor() {
         return `<tr><td>${esc(s)}</td><td class="mono">${esc(r.model)}</td><td class="${r.ok?'ok':'no'} mono">${esc(r.status)}</td></tr>`; }).join('')}</table>`;
   } catch (e) { $('#doctor').innerHTML = `<span class="no">${esc(e.message)}</span>`; }
 }
+
+// ---------- tabs
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  for (const t of ['chat','files','ask']) $('#tab-' + t).classList.toggle('hidden', t !== b.dataset.tab);
+  if (b.dataset.tab === 'files') loadFiles();
+});
+
+// ---------- project picker
+async function pickProject() {
+  const info = await api('/api/project');
+  const render = async (path) => {
+    const d = await api('/api/fs' + (path ? '?path=' + encodeURIComponent(path) : ''));
+    const recent = info.recent.map(p => `<div class="d" data-p="${esc(p)}">★ ${esc(p)}</div>`).join('');
+    openModal('Switch project', `
+      <div class="small muted" style="margin-bottom:6px">Current: <span class="mono">${esc(info.root)}</span></div>
+      <div class="row" style="margin-bottom:8px"><input id="pkPath" value="${esc(d.path)}" style="flex:1" placeholder="type a path…"><button id="pkGo">go</button><button id="pkUse" class="primary">use this folder</button></div>
+      ${recent ? `<div class="small muted">recent</div><div class="picker">${recent}</div><hr style="border:0;border-top:1px solid var(--line)">` : ''}
+      <div class="picker">${d.parent !== null ? `<div class="d" data-p="${esc(d.parent)}">↑ ..</div>` : ''}${d.dirs.map(x => `<div class="d" data-p="${esc(x.path)}">${x.guild?'🛠 ':x.git?'⎇ ':'📁 '}${esc(x.name)}</div>`).join('')}</div>`);
+    $('#modalBody').querySelectorAll('.d').forEach(el => el.onclick = () => render(el.dataset.p));
+    $('#pkGo').onclick = () => render($('#pkPath').value);
+    $('#pkUse').onclick = async () => {
+      try { await api('/api/project', {path: $('#pkPath').value || d.path}); $('#modal').classList.add('hidden');
+        agentStats = {}; renderTeam(); $('#log').innerHTML = ''; $('#chatLog').innerHTML = '';
+        const sel = $('#profile'); sel.innerHTML = ''; $('#askRole').innerHTML = '';
+        await refresh(); doctor(); loadRuns(); loadChat(); if (!$('#tab-files').classList.contains('hidden')) loadFiles();
+      } catch (e) { alert(e.message); }
+    };
+  };
+  render(info.root);
+}
+$('#root').onclick = pickProject;
+
+// ---------- files
+let allFiles = [];
+async function loadFiles() {
+  try {
+    const d = await api('/api/files'); allFiles = d.files;
+    $('#fileCount').textContent = `${d.files.length} files${d.truncated ? ' (truncated)' : ''} in ${d.root}`;
+    renderFiles();
+  } catch (e) { $('#ftree').innerHTML = `<span class="no">${esc(e.message)}</span>`; }
+}
+function renderFiles() {
+  const q = $('#fileFilter').value.toLowerCase();
+  const list = allFiles.filter(f => !q || f.path.toLowerCase().includes(q)).slice(0, 800);
+  $('#ftree').innerHTML = list.map(f => { const i = f.path.lastIndexOf('/'); const dir = i >= 0 ? f.path.slice(0, i + 1) : '';
+    return `<div data-p="${esc(f.path)}" title="${f.size} B"><span class="dir">${esc(dir)}</span>${esc(f.path.slice(i + 1))}</div>`; }).join('');
+  $('#ftree').querySelectorAll('div').forEach(el => el.onclick = () => showFile(el.dataset.p));
+}
+$('#fileFilter').oninput = renderFiles;
+async function showFile(path) {
+  try {
+    const d = await api('/api/file?path=' + encodeURIComponent(path));
+    const body = d.binary ? '<div class="muted">binary file</div>' : d.too_large ? '<div class="muted">file too large to show</div>'
+      : `<pre class="code">${d.content.split('\n').map((l, i) => `<span class="ln">${i + 1}</span>${esc(l)}`).join('\n')}</pre>`;
+    openModal(path, body, `<button id="mAskFile">ask about this file</button>`);
+    $('#mAskFile').onclick = () => { $('#modal').classList.add('hidden'); document.querySelector('.tabs button[data-tab="chat"]').click(); $('#chatQ').value = `About ${path}: `; $('#chatQ').focus(); };
+  } catch (e) { logLine('job_error', e.message); }
+}
+
+// ---------- chat
+function renderChat(items) {
+  const el = $('#chatLog');
+  el.innerHTML = items.map(m => `<div class="msg ${m.role}">${esc(m.content)}${m.model ? `<span class="m">${esc(m.model)}</span>` : ''}</div>`).join('') || '<div class="muted small">Ask anything about this project. The assistant can read files, search, and run tests — it never edits.</div>';
+  el.scrollTop = el.scrollHeight;
+}
+async function loadChat() { try { renderChat(await api('/api/chat')); } catch {} }
+async function sendChat() {
+  const message = $('#chatQ').value.trim(); if (!message) return;
+  $('#chatQ').value = '';
+  const items = await api('/api/chat'); items.push({role: 'user', content: message}); renderChat(items);
+  resetAgents();
+  try { await api('/api/chat', {message, profile: $('#profile').value}); await refresh(); }
+  catch (e) { logLine('job_error', e.message); }
+}
+$('#btnChat').onclick = sendChat;
+$('#chatQ').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });
+$('#btnChatClear').onclick = async () => { await fetch('/api/chat', {method: 'DELETE'}); renderChat([]); };
+
+// ---------- revise plan
+async function revisePlan() {
+  const instruction = $('#reviseQ').value.trim(); if (!instruction) return $('#reviseQ').focus();
+  resetAgents(); logLine('phase', `▶ revise plan: ${instruction}`);
+  try { await api('/api/plan/revise', {instruction, profile: $('#profile').value}); $('#reviseQ').value = ''; await refresh(); }
+  catch (e) { logLine('job_error', e.message); }
+}
+$('#btnRevise').onclick = revisePlan;
+$('#reviseQ').addEventListener('keydown', e => { if (e.key === 'Enter') revisePlan(); });
 
 // ---------- modal
 function openModal(title, bodyHtml, actsHtml='') { $('#modalTitle').textContent = title; $('#modalBody').innerHTML = bodyHtml; $('#modalActs').innerHTML = actsHtml; $('#modal').classList.remove('hidden'); }
@@ -365,9 +479,15 @@ function liveAppend(role, text) {
 function liveClear() { $('#live').classList.add('hidden'); $('#liveText').textContent = ''; liveRole = ''; }
 function onEvent(ev) {
   switch (ev.kind) {
-    case 'token': liveAppend(ev.role, ev.text); return;
+    case 'token':
+      if (ev.role === 'assistant') {
+        let d = $('#chatLog .msg.assistant.streaming');
+        if (!d) { d = document.createElement('div'); d.className = 'msg assistant streaming'; $('#chatLog').appendChild(d); }
+        d.textContent += ev.text; $('#chatLog').scrollTop = $('#chatLog').scrollHeight; return;
+      }
+      liveAppend(ev.role, ev.text); return;
     case 'phase': {
-      const who = {plan:'lead', implement:'engineer', verify:'verifier', critique:'critic', security:'security', lead_review:'lead', docs:'docs', ask: ev.role}[ev.phase];
+      const who = {plan:'lead', revise_plan:'lead', implement:'engineer', verify:'verifier', critique:'critic', security:'security', lead_review:'lead', docs:'docs', chat:'assistant', ask: ev.role}[ev.phase];
       for (const r of ROLES) if (agentStats[r]?.state === 'active') setAgent(r, {state:'done'});
       if (who) setAgent(who, {state:'active'});
       logLine('phase', `▶ ${ev.phase}${ev.task_id?' '+ev.task_id:''}${ev.round?' round '+ev.round:''}${ev.escalated?' (escalated)':''}${ev.goal?': '+ev.goal:''}`);
@@ -395,6 +515,7 @@ function onEvent(ev) {
       liveClear();
       for (const r of ROLES) if (agentStats[r]?.state === 'active') setAgent(r, {state:'done'});
       if (ev.job === 'ask' && ev.result) { $('#askOut').textContent = JSON.stringify(ev.result.data ?? ev.result.raw, null, 2); $('#askOut').classList.remove('hidden'); }
+      if (ev.job === 'chat') loadChat();
       refresh(); loadRuns(); break;
     case 'job_error':
       liveClear();
@@ -409,7 +530,7 @@ function connect() {
 }
 const style = document.createElement('style'); style.textContent = '.hideTools .tool_call{display:none}'; document.head.appendChild(style);
 
-renderTeam(); refresh().then(() => { doctor(); loadRuns(); connect(); });
+renderTeam(); refresh().then(() => { doctor(); loadRuns(); loadChat(); connect(); });
 </script>
 </body>
 </html>

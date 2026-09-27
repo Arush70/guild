@@ -167,6 +167,20 @@ class AskReq(BaseModel):
     profile: str | None = None
 
 
+class ChatReq(BaseModel):
+    message: str
+    profile: str | None = None
+
+
+class ReviseReq(BaseModel):
+    instruction: str
+    profile: str | None = None
+
+
+class ProjectReq(BaseModel):
+    path: str
+
+
 class ConfigReq(BaseModel):
     profile: str | None = None
     test_command: str | None = None
@@ -174,17 +188,31 @@ class ConfigReq(BaseModel):
     roles_enabled: list[str] | None = None
 
 
+class _State:
+    """Mutable server state: the active project and its event hub (switchable at runtime)."""
+
+    def __init__(self, root: Path):
+        self.root = root.resolve()
+        self.hub = Hub(self.root)
+        self.chat_history: list[dict] = []
+
+    def switch(self, root: Path) -> None:
+        self.root = root.resolve()
+        self.hub = Hub(self.root)
+        self.chat_history = []
+
+
 def create_app(root: Path) -> FastAPI:
     app = FastAPI(title="guild", docs_url=None, redoc_url=None)
-    hub = Hub(root)
+    S = _State(root)
 
     def _make_guild(profile_override: str | None):
         from ..workflow import Guild
-        cfg = load_project_config(root)
-        prof = load_profile(profile_override or cfg.profile, root)
-        g = Guild(root, cfg, prof, report=lambda lvl, msg: hub.publish({"kind": "report", "level": lvl, "msg": msg}),
-                  on_token=hub.token)
-        g.trace.echo = lambda ev: hub.publish(dict(ev))
+        cfg = load_project_config(S.root)
+        prof = load_profile(profile_override or cfg.profile, S.root)
+        g = Guild(S.root, cfg, prof, report=lambda lvl, msg: S.hub.publish({"kind": "report", "level": lvl, "msg": msg}),
+                  on_token=S.hub.token)
+        g.trace.echo = lambda ev: S.hub.publish(dict(ev))
         return g
 
     @app.get("/", response_class=HTMLResponse)
@@ -194,10 +222,10 @@ def create_app(root: Path) -> FastAPI:
     @app.get("/api/state")
     def state():
         # snapshot job status BEFORE reading files, so "not busy" implies the plan is on disk
-        busy = hub.busy()
-        job = _jsonable(hub.job) if hub.job else None
-        cfg = load_project_config(root)
-        plan = _read_plan(root)
+        busy = S.hub.busy()
+        job = _jsonable(S.hub.job) if S.hub.job else None
+        cfg = load_project_config(S.root)
+        plan = _read_plan(S.root)
         warnings: list[str] = []
         if plan:
             from ..workflow import Plan
@@ -206,15 +234,142 @@ def create_app(root: Path) -> FastAPI:
             except (KeyError, TypeError):
                 warnings = []
         return {
-            "root": str(root), "config": cfg.model_dump(), "plan_warnings": warnings,
-            "profiles": list_available("profiles", root), "roles": list_available("roles", root),
+            "root": str(S.root), "config": cfg.model_dump(), "plan_warnings": warnings,
+            "profiles": list_available("profiles", S.root), "roles": list_available("roles", S.root),
             "plan": plan, "busy": busy, "job": job,
         }
 
+    # ---- project selection -------------------------------------------------------------
+    @app.get("/api/project")
+    def project_info():
+        return {"root": str(S.root), "initialised": (S.root / GUILD_DIR / "config.yaml").exists(),
+                "git": (S.root / ".git").is_dir(), "recent": _recent_projects()}
+
+    @app.post("/api/project")
+    def project_switch(req: ProjectReq):
+        if S.hub.busy():
+            raise HTTPException(409, "a job is running; wait for it to finish before switching")
+        p = Path(req.path).expanduser()
+        if not p.is_dir():
+            raise HTTPException(400, f"not a directory: {req.path}")
+        S.switch(p)
+        if not (S.root / GUILD_DIR / "config.yaml").exists():
+            # first time here: write a default config (user can run `guild init` for the wizard)
+            from ..hardware import detect_test_command
+            save_project_config(S.root, ProjectConfig(test_command=detect_test_command(S.root)))
+        _remember_project(S.root)
+        return project_info()
+
+    @app.get("/api/fs")
+    def fs_list(path: str | None = None):
+        """Server-side folder picker: list subdirectories of a path (or drives/home if none)."""
+        if not path:
+            entries = []
+            if os.name == "nt":
+                import string
+                for d in string.ascii_uppercase:
+                    if Path(f"{d}:\\").exists():
+                        entries.append({"name": f"{d}:\\", "path": f"{d}:\\"})
+            entries.insert(0, {"name": "~ (home)", "path": str(Path.home())})
+            return {"path": "", "parent": None, "dirs": entries}
+        p = Path(path).expanduser()
+        if not p.is_dir():
+            raise HTTPException(400, "not a directory")
+        dirs = []
+        try:
+            for child in sorted(p.iterdir(), key=lambda c: c.name.lower()):
+                if child.is_dir() and not child.name.startswith(".") and child.name not in {"node_modules", "__pycache__", "$RECYCLE.BIN", "System Volume Information"}:
+                    dirs.append({"name": child.name, "path": str(child), "git": (child / ".git").is_dir(),
+                                 "guild": (child / GUILD_DIR).is_dir()})
+        except PermissionError:
+            pass
+        return {"path": str(p), "parent": str(p.parent) if p.parent != p else None, "dirs": dirs[:500]}
+
+    # ---- files -----------------------------------------------------------------------------
+    @app.get("/api/files")
+    def files():
+        cfg = load_project_config(S.root)
+        from ..tools.registry import ToolContext
+        ctx = ToolContext(root=S.root, ignore=cfg.ignore, test_command="", lint_command=None, sandbox=None)
+        out = []
+        for dirpath, dirnames, filenames in os.walk(S.root):
+            rel_dir = os.path.relpath(dirpath, S.root)
+            dirnames[:] = sorted(d for d in dirnames if not ctx.is_ignored(os.path.join(rel_dir, d)))
+            for f in sorted(filenames):
+                rel = os.path.normpath(os.path.join(rel_dir, f)).replace("\\", "/")
+                if rel.startswith("./"):
+                    rel = rel[2:]
+                if ctx.is_ignored(rel):
+                    continue
+                try:
+                    size = (Path(dirpath) / f).stat().st_size
+                except OSError:
+                    size = 0
+                out.append({"path": rel, "size": size})
+                if len(out) >= 3000:
+                    return {"root": str(S.root), "files": out, "truncated": True}
+        return {"root": str(S.root), "files": out, "truncated": False}
+
+    @app.get("/api/file")
+    def file_read(path: str):
+        from ..tools.registry import ToolContext
+        cfg = load_project_config(S.root)
+        ctx = ToolContext(root=S.root, ignore=cfg.ignore, test_command="", lint_command=None, sandbox=None)
+        try:
+            p = ctx.resolve(path)
+        except PermissionError as e:
+            raise HTTPException(403, str(e)) from e
+        if not p.is_file():
+            raise HTTPException(404, "no such file")
+        if p.stat().st_size > 2_000_000:
+            return {"path": path, "content": None, "binary": False, "too_large": True}
+        raw = p.read_bytes()
+        if b"\x00" in raw[:4096]:
+            return {"path": path, "content": None, "binary": True}
+        return {"path": path, "content": raw.decode("utf-8", errors="replace"), "binary": False}
+
+    # ---- chat ------------------------------------------------------------------------------
+    @app.get("/api/chat")
+    def chat_history():
+        return S.chat_history
+
+    @app.delete("/api/chat")
+    def chat_clear():
+        S.chat_history = []
+        return []
+
+    @app.post("/api/chat")
+    def chat(req: ChatReq):
+        history = list(S.chat_history)
+        S.chat_history.append({"role": "user", "content": req.message, "ts": time.time()})
+
+        def fn():
+            g = _make_guild(req.profile)
+            try:
+                res = g.chat(req.message, history)
+            finally:
+                g.close()
+            S.chat_history.append({"role": "assistant", "content": res.raw, "model": res.model, "ts": time.time()})
+            return {"text": res.raw, "model": res.model}
+        S.hub.start("chat", fn)
+        return {"ok": True}
+
+    # ---- plan revision ---------------------------------------------------------------------
+    @app.post("/api/plan/revise")
+    def plan_revise(req: ReviseReq):
+        def fn():
+            g = _make_guild(req.profile)
+            try:
+                return g.revise_plan(req.instruction)
+            finally:
+                g.close()
+        S.hub.start("revise", fn)
+        return {"ok": True}
+
     @app.get("/api/doctor")
     def doctor(profile: str | None = None):
-        cfg = load_project_config(root)
-        prof = load_profile(profile or cfg.profile, root)
+        cfg = load_project_config(S.root)
+        prof = load_profile(profile or cfg.profile, S.root)
         ollama = _ollama_models()
         rows = []
         for slot, chain in prof.slots.items():
@@ -237,20 +392,20 @@ def create_app(root: Path) -> FastAPI:
                 else:
                     st, ok = "unknown provider", False
                 rows.append({"slot": slot, "model": m, "status": st, "ok": ok})
-        return {"profile": prof.model_dump(), "rows": rows, "git": (root / ".git").is_dir(),
+        return {"profile": prof.model_dump(), "rows": rows, "git": (S.root / ".git").is_dir(),
                 "ollama_models": ollama or []}
 
     @app.get("/api/roles")
     def roles():
-        return [load_role(n, root).model_dump() for n in list_available("roles", root)]
+        return [load_role(n, S.root).model_dump() for n in list_available("roles", S.root)]
 
     @app.post("/api/config")
     def set_config(req: ConfigReq):
-        cfg = load_project_config(root)
+        cfg = load_project_config(S.root)
         for k, v in req.model_dump().items():
             if v is not None:
                 setattr(cfg, k, v)
-        save_project_config(root, cfg)
+        save_project_config(S.root, cfg)
         return cfg.model_dump()
 
     @app.post("/api/plan")
@@ -261,7 +416,7 @@ def create_app(root: Path) -> FastAPI:
                 return g.plan(req.goal, extra_context=(f"ADDITIONAL BRIEF:\n{req.context}" if req.context else ""))
             finally:
                 g.close()
-        hub.start("plan", fn)
+        S.hub.start("plan", fn)
         return {"ok": True}
 
     @app.post("/api/run")
@@ -278,7 +433,7 @@ def create_app(root: Path) -> FastAPI:
                 return g.run_tasks(p, ids, all_tasks=req.all, roles=roles_)
             finally:
                 g.close()
-        hub.start("run", fn)
+        S.hub.start("run", fn)
         return {"ok": True}
 
     @app.post("/api/ask")
@@ -289,16 +444,16 @@ def create_app(root: Path) -> FastAPI:
                 return g.ask(req.role, req.question)
             finally:
                 g.close()
-        hub.start("ask", fn)
+        S.hub.start("ask", fn)
         return {"ok": True}
 
     @app.post("/api/plan/task")
     def update_task(body: dict):
         """Edit a task's fields or delete it (body: {id, ...fields} or {id, delete: true})."""
-        plan = _read_plan(root)
+        plan = _read_plan(S.root)
         if plan is None:
             raise HTTPException(404, "no plan")
-        plan_p = root / GUILD_DIR / "plan.json"
+        plan_p = S.root / GUILD_DIR / "plan.json"
         tid = body.get("id")
         if body.get("delete"):
             plan["tasks"] = [t for t in plan["tasks"] if t["id"] != tid]
@@ -316,15 +471,15 @@ def create_app(root: Path) -> FastAPI:
     # ---- branches: review & merge from the dashboard (human decision, guild never auto-merges)
     def _wf():
         from ..workflow import Guild
-        cfg = load_project_config(root)
-        prof = load_profile(cfg.profile, root)
+        cfg = load_project_config(S.root)
+        prof = load_profile(cfg.profile, S.root)
         g = Guild.__new__(Guild)  # git helpers only; no trace/run dir created
-        g.root, g.cfg, g.profile, g.dry_run = root, cfg, prof, False
+        g.root, g.cfg, g.profile, g.dry_run = S.root, cfg, prof, False
         return g
 
     @app.get("/api/branches/{task_id}/diff")
     def branch_diff(task_id: str):
-        plan = _read_plan(root) or {}
+        plan = _read_plan(S.root) or {}
         task = next((t for t in plan.get("tasks", []) if t["id"] == task_id), None)
         if not task or not task.get("branch"):
             raise HTTPException(404, "task has no branch")
@@ -332,27 +487,27 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/branches/{task_id}/merge")
     def branch_merge(task_id: str):
-        if hub.busy():
+        if S.hub.busy():
             raise HTTPException(409, "a job is running")
-        plan = _read_plan(root) or {}
+        plan = _read_plan(S.root) or {}
         task = next((t for t in plan.get("tasks", []) if t["id"] == task_id), None)
         if not task or not task.get("branch"):
             raise HTTPException(404, "task has no branch")
         res = _wf().merge_branch(task["branch"])
         if res.get("ok"):
             task["merged"] = True
-            plan_p = root / GUILD_DIR / "plan.json"
+            plan_p = S.root / GUILD_DIR / "plan.json"
             tmp = plan_p.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(plan, indent=2), encoding="utf-8")
             os.replace(tmp, plan_p)
-            hub.publish({"kind": "report", "level": "info", "msg": f"merged {task['branch']} into {res['base']}"})
+            S.hub.publish({"kind": "report", "level": "info", "msg": f"merged {task['branch']} into {res['base']}"})
         return res
 
     @app.post("/api/branches/{task_id}/discard")
     def branch_discard(task_id: str):
-        if hub.busy():
+        if S.hub.busy():
             raise HTTPException(409, "a job is running")
-        plan = _read_plan(root) or {}
+        plan = _read_plan(S.root) or {}
         task = next((t for t in plan.get("tasks", []) if t["id"] == task_id), None)
         if not task or not task.get("branch"):
             raise HTTPException(404, "task has no branch")
@@ -360,7 +515,7 @@ def create_app(root: Path) -> FastAPI:
         if res.get("ok"):
             task["branch"] = None
             task["status"] = "todo"
-            plan_p = root / GUILD_DIR / "plan.json"
+            plan_p = S.root / GUILD_DIR / "plan.json"
             tmp = plan_p.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(plan, indent=2), encoding="utf-8")
             os.replace(tmp, plan_p)
@@ -369,7 +524,7 @@ def create_app(root: Path) -> FastAPI:
     @app.get("/api/runs")
     def runs():
         out = []
-        paths = sorted((root / GUILD_DIR / "runs").glob("*/trace.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        paths = sorted((S.root / GUILD_DIR / "runs").glob("*/trace.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
         for p in paths[:50]:
             ev = read_trace(p)
             calls = [e for e in ev if e["kind"] == "model_call"]
@@ -386,7 +541,7 @@ def create_app(root: Path) -> FastAPI:
     def run_detail(run_id: str):
         if "/" in run_id or ".." in run_id or "\\" in run_id:
             raise HTTPException(404)
-        p = root / GUILD_DIR / "runs" / run_id / "trace.jsonl"
+        p = S.root / GUILD_DIR / "runs" / run_id / "trace.jsonl"
         if not p.exists():
             raise HTTPException(404)
         events = read_trace(p)
@@ -409,7 +564,7 @@ def create_app(root: Path) -> FastAPI:
 
     @app.get("/api/events")
     def events():
-        q = hub.subscribe()
+        q = S.hub.subscribe()
 
         def gen():
             try:
@@ -421,12 +576,32 @@ def create_app(root: Path) -> FastAPI:
                     except queue.Empty:
                         yield ": keepalive\n\n"
             finally:
-                hub.unsubscribe(q)
+                S.hub.unsubscribe(q)
 
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     return app
+
+
+_RECENT = Path.home() / ".guild" / "recent.json"
+
+
+def _recent_projects() -> list[str]:
+    try:
+        items = json.loads(_RECENT.read_text(encoding="utf-8"))
+        return [p for p in items if Path(p).is_dir()][:12]
+    except (OSError, ValueError):
+        return []
+
+
+def _remember_project(root: Path) -> None:
+    items = [str(root)] + [p for p in _recent_projects() if p != str(root)]
+    try:
+        _RECENT.parent.mkdir(parents=True, exist_ok=True)
+        _RECENT.write_text(json.dumps(items[:12]), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _read_plan(root: Path) -> dict | None:
@@ -455,6 +630,7 @@ def serve(root: Path, port: int = 7331, open_browser: bool = True) -> None:
     import uvicorn
     if not (root / GUILD_DIR / "config.yaml").exists():
         save_project_config(root, ProjectConfig())
+    _remember_project(root.resolve())
     app = create_app(root)
     url = f"http://127.0.0.1:{port}"
     if open_browser:
