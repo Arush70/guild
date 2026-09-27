@@ -12,6 +12,10 @@
 - docs: TROUBLESHOOTING.md, ADDING_A_ROLE.md.
 
 ## Unreleased
+- Engineer that reports done without changing any file is asked again, then blocked (never falsely accepted).
+- Engineer prompt: code in the reply is discarded; tools are the only way to change files.
+- Crashes inside a task write an `error` event with traceback to the trace and the dashboard.
+- Streaming parser hardened for Ollama quirks (missing tool-call index, reasoning-only chunks).
 - Verification is deterministic: guild runs the test command itself (no LLM verifier in the loop).
 - Text tool-call fallback: `{"name": ..., "arguments": ...}` written as plain text by small models is executed.
 - `.guild/` is never committed or included in review diffs.

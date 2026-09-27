@@ -21,6 +21,9 @@ ENGINEER_GOOD = [
 ]
 VERIFIER_RUNS = [[("run_tests", {})], {"passed": True, "tests_run": 2, "failures": [], "output_tail": "2 passed"}]
 APPROVE = {"verdict": "approve", "findings": [], "summary": "fine"}
+DONE = {"status": "done", "summary": "touched", "files_changed": ["notes.txt"], "tests_run": "", "notes_for_reviewer": ""}
+# an engineer turn that actually changes a file (the workflow refuses "done" with no changes)
+ENG_TOUCH = [[("write_file", {"path": "notes.txt", "content": "touched\n"})], DONE]
 LEAD_ACCEPT = {"decision": "ACCEPT", "notes": "good", "improvements": ["add type hints"]}
 DOCS = [[("edit_file", {"path": "README.md", "old_text": "# demo\n", "new_text": "# demo\n\nHas multiply.\n"})],
         {"files_changed": ["README.md"], "summary": "documented multiply"}]
@@ -63,9 +66,7 @@ def test_happy_path_accepts_and_documents(project, cfg, profile):
 def test_revision_round_then_escalation(project, cfg, profile):
     reject = {"verdict": "request_changes", "summary": "bad",
               "findings": [{"severity": "high", "file": "app.py", "issue": "no test", "suggestion": "add one"}]}
-    eng = [{"status": "done", "summary": "r1", "files_changed": [], "tests_run": "", "notes_for_reviewer": ""},
-           {"status": "done", "summary": "r2", "files_changed": [], "tests_run": "", "notes_for_reviewer": ""},
-           {"status": "done", "summary": "r3", "files_changed": [], "tests_run": "", "notes_for_reviewer": ""}]
+    eng = ENG_TOUCH * 3
     fake = FakeProvider({"engineer": eng, "verifier": [VERIFIER_RUNS[1]] * 3,
                          "critic": [reject, reject, APPROVE], "security": [APPROVE] * 3,
                          "lead": [LEAD_ACCEPT], "docs": [DOCS[1]]})
@@ -75,13 +76,13 @@ def test_revision_round_then_escalation(project, cfg, profile):
     g.close()
     assert out.accepted and out.rounds == 3 and out.escalated
     models = [m for r, m in fake.calls if r == "engineer"]
-    assert models == ["small", "small", "big"]  # escalated after 2 failed rounds
+    assert models == ["small", "small", "small", "small", "big", "big"]  # 2 calls per round; escalated after 2 failed rounds
 
 
 def test_security_block_prevents_acceptance(project, cfg, profile):
     block = {"verdict": "block", "summary": "secret committed",
              "findings": [{"severity": "critical", "file": "app.py", "issue": "API key", "evidence": "x", "fix": "remove"}]}
-    eng = [{"status": "done", "summary": "", "files_changed": [], "tests_run": "", "notes_for_reviewer": ""}] * 3
+    eng = ENG_TOUCH * 3
     fake = FakeProvider({"engineer": eng, "verifier": [VERIFIER_RUNS[1]] * 3, "critic": [APPROVE] * 3,
                          "security": [block] * 3})
     g = _guild(project, cfg, profile, fake)
@@ -133,7 +134,7 @@ def test_path_escape_refused(project, cfg, profile):
 
 
 def test_run_tasks_selected_ids_in_order(project, cfg, profile):
-    eng = [{"status": "done", "summary": "", "files_changed": [], "tests_run": "", "notes_for_reviewer": ""}] * 2
+    eng = ENG_TOUCH * 2
     fake = FakeProvider({"engineer": eng, "verifier": [VERIFIER_RUNS[1]] * 2, "critic": [APPROVE] * 2,
                          "security": [APPROVE] * 2, "lead": [LEAD_ACCEPT] * 2, "docs": [DOCS[1]] * 2})
     g = _guild(project, cfg, profile, fake)
@@ -150,7 +151,7 @@ def test_run_tasks_selected_ids_in_order(project, cfg, profile):
 def test_verification_detects_real_failure(project, cfg, profile):
     # engineer "does" nothing but the repo now has a failing test → verification must fail
     (project / "test_bad.py").write_text("def test_bad():\n    assert 1 == 2\n")
-    eng = [{"status": "done", "summary": "", "files_changed": [], "tests_run": "", "notes_for_reviewer": ""}] * 3
+    eng = ENG_TOUCH * 3
     fake = FakeProvider({"engineer": eng, "critic": [APPROVE] * 3, "security": [APPROVE] * 3})
     g = _guild(project, cfg, profile, fake)
     plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
@@ -201,7 +202,7 @@ def test_guild_metadata_never_in_commits_or_diff(project, cfg, profile):
 
 def test_selected_tasks_continue_after_failure(project, cfg, profile):
     block = {"verdict": "block", "summary": "bad", "findings": []}
-    eng = [{"status": "done", "summary": "", "files_changed": [], "tests_run": "", "notes_for_reviewer": ""}] * 6
+    eng = ENG_TOUCH * 6
     fake = FakeProvider({"engineer": eng, "critic": [APPROVE] * 6,
                          "security": [block] * 3 + [APPROVE] * 3, "lead": [LEAD_ACCEPT], "docs": [DOCS[1]]})
     g = _guild(project, cfg, profile, fake)
@@ -256,3 +257,48 @@ def test_merge_and_discard_helpers(project, cfg, profile):
     assert res["ok"], res
     assert g.current_branch() == "master" and "multiply" in (project / "app.py").read_text()
     assert not g._git("rev-parse", "--verify", "--quiet", out.task.branch)  # branch deleted after merge
+
+
+def test_engineer_done_without_changes_is_pushed_back(project, cfg, profile):
+    """A model that writes code as prose and says 'done' gets one more go; if it still changes
+    nothing, the task is blocked rather than falsely accepted."""
+    from guild.providers.base import Completion, Message, Usage
+
+    class ProseEngineer:
+        def __init__(self):
+            self.n = 0
+        def complete(self, model_name, messages, tools, max_tokens, temperature, on_token=None):
+            self.n += 1
+            role = messages[0].content
+            if "Software Engineer" in role[:300]:
+                txt = ('Here is the code:\n```python\ndef multiply(a, b):\n    return a * b\n```\n'
+                       '{"status": "done", "summary": "added multiply", "files_changed": ["app.py"], "tests_run": "", "notes_for_reviewer": ""}')
+            else:
+                txt = '{"verdict": "approve", "findings": [], "summary": "ok"}'
+            return Completion(Message("assistant", txt), Usage(1, 1), f"fake/{model_name}", "stop")
+
+    fake = ProseEngineer()
+    g = Guild(project, cfg, profile)
+    g.router.register_provider("fake", fake)
+    plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
+    out = g.run_task(plan, plan.tasks[0], roles=["engineer", "verifier", "critic"])
+    g.close()
+    assert not out.accepted and out.task.status == "blocked"
+    assert "no file changes" in out.task.notes
+    assert "multiply" not in (project / "app.py").read_text()
+    notes = [e for e in read_trace(g.trace.path) if e["kind"] == "note"]
+    assert any("changed no files" in e["msg"] for e in notes)
+
+
+def test_run_task_records_traceback_on_crash(project, cfg, profile, monkeypatch):
+    fake = FakeProvider({"engineer": ENGINEER_GOOD})
+    g = _guild(project, cfg, profile, fake)
+    monkeypatch.setattr(g, "verify", lambda: (_ for _ in ()).throw(TypeError("boom")))
+    plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
+    import pytest
+    with pytest.raises(TypeError):
+        g.run_task(plan, plan.tasks[0])
+    g.close()
+    err = [e for e in read_trace(g.trace.path) if e["kind"] == "error"]
+    assert err and "boom" in err[0]["error"] and "verify" in err[0]["traceback"]
+    assert plan.tasks[0].status == "todo" and "guild error" in plan.tasks[0].notes

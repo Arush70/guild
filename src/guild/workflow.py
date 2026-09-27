@@ -333,6 +333,19 @@ class Guild:
 
     # ------------------------------------------------------------------ run one task
     def run_task(self, plan: Plan, task: Task, *, roles: list[str] | None = None) -> TaskOutcome:
+        try:
+            return self._run_task(plan, task, roles=roles)
+        except Exception as e:  # noqa: BLE001 — record where it died, then re-raise
+            import traceback
+            self.trace.emit("error", task_id=task.id, error=f"{type(e).__name__}: {e}",
+                            traceback=traceback.format_exc()[-4000:])
+            if task.status == "in_progress":
+                task.status = "todo"
+                task.notes = f"guild error: {type(e).__name__}: {e}"
+                self.save_plan(plan)
+            raise
+
+    def _run_task(self, plan: Plan, task: Task, *, roles: list[str] | None = None) -> TaskOutcome:
         enabled = roles or self.cfg.roles_enabled
         limits = self.profile.limits
         self._phase("task_start", task_id=task.id, title=task.title)
@@ -357,9 +370,24 @@ class Guild:
 
         for rounds in range(1, limits.max_revision_rounds + 1):
             self._phase("implement", task_id=task.id, round=rounds, escalated=escalated)
-            eng = self.agent("engineer", escalate=escalated).run(
+            eng_agent = self.agent("engineer", escalate=escalated)
+            eng = eng_agent.run(
                 task_brief + (f"\n\nREVIEW FEEDBACK TO ADDRESS:\n{feedback}" if feedback else ""),
                 context_blocks=project_ctx)
+            if eng.data and eng.data.get("status") == "done" and not eng_agent.ctx.files_written:
+                # Common small-model failure: code written as prose in the reply, nothing on disk.
+                self.trace.emit("note", role="engineer", msg="reported done but changed no files; asking again")
+                self.report("warn", "engineer reported done but changed no files — asking it to use the tools")
+                eng = eng_agent.run(
+                    task_brief + "\n\nIMPORTANT: your previous reply described code but did not change any file. "
+                    "Code written in the reply is DISCARDED. The ONLY way to change the project is the "
+                    "write_file / edit_file tools. Call them now with the full file contents, run run_tests, "
+                    "then reply with the final JSON."
+                    + (f"\n\nREVIEW FEEDBACK TO ADDRESS:\n{feedback}" if feedback else ""),
+                    context_blocks=project_ctx)
+                if eng.data and eng.data.get("status") == "done" and not eng_agent.ctx.files_written:
+                    eng.data["status"] = "blocked"
+                    eng.data["summary"] = "engineer produced no file changes after two attempts (model wrote code as text)"
             self.trace.emit("decision", role="engineer", round=rounds, status=(eng.data or {}).get("status"),
                             summary=(eng.data or {}).get("summary", eng.raw[:300]))
             self._commit(f"guild({task.id}) round {rounds}: {task.title}")
