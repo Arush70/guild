@@ -1,0 +1,29 @@
+# Copy to .github/workflows/guild-review.yml in YOUR project to get an AI review comment on
+# every pull request. Uses cheap cloud models; set the secrets in your repo settings.
+name: guild review
+on: [pull_request]
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, pull-requests: write }
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install guild-ai
+      - name: review the PR diff
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}     # free tier is enough
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }} # optional, better critic
+        run: |
+          guild init . -y --profile free
+          guild review --ref origin/${{ github.base_ref }} > review.txt || true
+          cat review.txt
+      - name: post as PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = '### guild review\n```\n' + fs.readFileSync('review.txt', 'utf8').slice(0, 60000) + '\n```';
+            await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });

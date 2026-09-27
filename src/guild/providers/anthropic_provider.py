@@ -47,7 +47,7 @@ class AnthropicProvider:
         return self._client
 
     def complete(self, model_name: str, messages: list[Message], tools: list[ToolSpec] | None,
-                 max_tokens: int, temperature: float) -> Completion:
+                 max_tokens: int, temperature: float, on_token=None) -> Completion:
         full = f"anthropic/{model_name}"
         client = self.client(full)
         system, msgs = _to_anthropic(messages)
@@ -59,7 +59,13 @@ class AnthropicProvider:
             kwargs["tools"] = [{"name": t.name, "description": t.description,
                                 "input_schema": t.parameters} for t in tools]
         try:
-            resp = client.messages.create(**kwargs)
+            if on_token is None:
+                resp = client.messages.create(**kwargs)
+            else:
+                with client.messages.stream(**kwargs) as stream:
+                    for text in stream.text_stream:
+                        on_token(text)
+                    resp = stream.get_final_message()
         except Exception as e:  # noqa: BLE001
             raise _classify(full, e) from e
 

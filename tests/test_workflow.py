@@ -212,3 +212,47 @@ def test_selected_tasks_continue_after_failure(project, cfg, profile):
     outs = g.run_tasks(plan, ["T1", "T2", "T3"])
     g.close()
     assert [(o.task.id, o.accepted) for o in outs] == [("T1", False), ("T2", True)]  # T3 skipped: depends on T1
+
+
+def test_untracked_files_do_not_block_branch_and_stay_uncommitted(project, cfg, profile):
+    (project / "scratch.txt").write_text("mine")  # untracked, pre-existing
+    fake = FakeProvider({"engineer": ENGINEER_GOOD, "critic": [APPROVE], "security": [APPROVE],
+                         "lead": [LEAD_ACCEPT], "docs": [DOCS[1]]})
+    g = _guild(project, cfg, profile, fake)
+    plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
+    out = g.run_task(plan, plan.tasks[0])
+    g.close()
+    import subprocess
+    assert out.task.branch and out.task.branch.startswith("guild/")
+    tracked = subprocess.run(["git", "ls-files"], cwd=project, capture_output=True, text=True).stdout
+    assert "scratch.txt" not in tracked and "test_multiply.py" in tracked
+
+
+def test_dirty_tracked_file_means_no_branch_and_no_commit(project, cfg, profile):
+    (project / "app.py").write_text("def add(a, b):\n    return a + b  # edited\n")  # tracked, modified
+    import subprocess
+    head0 = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, capture_output=True, text=True).stdout
+    fake = FakeProvider({"engineer": ENGINEER_GOOD, "critic": [APPROVE], "security": [APPROVE],
+                         "lead": [LEAD_ACCEPT], "docs": [DOCS[1]]})
+    g = _guild(project, cfg, profile, fake)
+    plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
+    out = g.run_task(plan, plan.tasks[0])
+    g.close()
+    head1 = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, capture_output=True, text=True).stdout
+    branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=project, capture_output=True, text=True).stdout.strip()
+    assert out.task.branch is None and head0 == head1 and branch == "master"  # nothing committed, still on master
+
+
+def test_merge_and_discard_helpers(project, cfg, profile):
+    fake = FakeProvider({"engineer": ENGINEER_GOOD, "critic": [APPROVE], "security": [APPROVE],
+                         "lead": [LEAD_ACCEPT], "docs": [DOCS[1]]})
+    g = _guild(project, cfg, profile, fake)
+    plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
+    out = g.run_task(plan, plan.tasks[0])
+    d = g.branch_diff(out.task.branch)
+    assert d["exists"] and "multiply" in d["diff"] and "test_multiply.py" in d["stat"]
+    res = g.merge_branch(out.task.branch)
+    g.close()
+    assert res["ok"], res
+    assert g.current_branch() == "master" and "multiply" in (project / "app.py").read_text()
+    assert not g._git("rev-parse", "--verify", "--quiet", out.task.branch)  # branch deleted after merge

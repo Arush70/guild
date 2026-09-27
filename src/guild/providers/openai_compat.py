@@ -89,7 +89,7 @@ class OpenAICompatProvider:
         return self._client
 
     def complete(self, model_name: str, messages: list[Message], tools: list[ToolSpec] | None,
-                 max_tokens: int, temperature: float) -> Completion:
+                 max_tokens: int, temperature: float, on_token=None) -> Completion:
         full = f"{self.provider}/{model_name}"
         client = self.client(full)
         kwargs: dict = dict(model=model_name, messages=_to_openai_messages(messages),
@@ -97,10 +97,17 @@ class OpenAICompatProvider:
         if tools:
             kwargs["tools"] = _to_openai_tools(tools)
         try:
-            resp = client.chat.completions.create(**kwargs)
+            if on_token is None:
+                resp = client.chat.completions.create(**kwargs)
+                return self._from_response(resp, full)
+            return self._stream(client, kwargs, full, on_token)
+        except ProviderError:
+            raise
         except Exception as e:  # noqa: BLE001 — classify below
             raise _classify(full, e) from e
 
+    @staticmethod
+    def _from_response(resp, full: str) -> Completion:
         choice = resp.choices[0]
         msg = choice.message
         calls = [
@@ -114,6 +121,42 @@ class OpenAICompatProvider:
             message=Message(role="assistant", content=msg.content or "", tool_calls=calls),
             usage=usage, model=full, stop_reason=choice.finish_reason or "",
         )
+
+    @staticmethod
+    def _stream(client, kwargs: dict, full: str, on_token) -> Completion:
+        """Consume a streamed response, forwarding text deltas and assembling tool calls."""
+        text_parts: list[str] = []
+        calls: dict[int, dict] = {}  # index -> {id, name, args}
+        usage = Usage()
+        finish = ""
+        stream = client.chat.completions.create(stream=True, stream_options={"include_usage": True}, **kwargs)
+        for chunk in stream:
+            if getattr(chunk, "usage", None):
+                usage = Usage(chunk.usage.prompt_tokens or 0, chunk.usage.completion_tokens or 0)
+            if not chunk.choices:
+                continue
+            ch = chunk.choices[0]
+            if ch.finish_reason:
+                finish = ch.finish_reason
+            delta = ch.delta
+            if delta is None:
+                continue
+            if delta.content:
+                text_parts.append(delta.content)
+                on_token(delta.content)
+            for tc in delta.tool_calls or []:
+                slot = calls.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+                if tc.id:
+                    slot["id"] = tc.id
+                if tc.function:
+                    if tc.function.name:
+                        slot["name"] += tc.function.name
+                    if tc.function.arguments:
+                        slot["args"] += tc.function.arguments
+        tool_calls = [ToolCall(id=c["id"] or f"call_{i}", name=c["name"], arguments=parse_json_args(c["args"]))
+                      for i, c in sorted(calls.items()) if c["name"]]
+        return Completion(message=Message(role="assistant", content="".join(text_parts), tool_calls=tool_calls),
+                          usage=usage, model=full, stop_reason=finish)
 
 
 def _classify(model: str, e: Exception) -> ProviderError:

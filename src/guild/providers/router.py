@@ -14,9 +14,12 @@ from .base import Completion, Message, NotConfigured, ProviderError, ToolSpec, U
 from .openai_compat import ENDPOINTS, OpenAICompatProvider
 
 
+OnToken = Callable[[str], None]
+
+
 class Provider(Protocol):
     def complete(self, model_name: str, messages: list[Message], tools: list[ToolSpec] | None,
-                 max_tokens: int, temperature: float) -> Completion: ...
+                 max_tokens: int, temperature: float, on_token: OnToken | None = None) -> Completion: ...
 
 
 # USD per 1M tokens (input, output). Approximate list prices; used for *estimates* only.
@@ -140,7 +143,8 @@ class Router:
         return [m for m in chain if m not in self._dead]
 
     def complete(self, slot: str, messages: list[Message], tools: list[ToolSpec] | None = None,
-                 *, max_tokens: int = 4096, temperature: float = 0.2, role: str = "") -> Completion:
+                 *, max_tokens: int = 4096, temperature: float = 0.2, role: str = "",
+                 on_token: OnToken | None = None) -> Completion:
         if self.max_usd is not None and self.max_usd > 0 and self.tracker.total_usd >= self.max_usd:
             raise BudgetExceeded(f"run cost ${self.tracker.total_usd:.3f} reached cap ${self.max_usd:.2f}")
 
@@ -160,7 +164,13 @@ class Router:
 
             t0 = time.time()
             try:
-                comp = provider.complete(model_name, messages, tools, max_tokens, temperature)
+                try:
+                    comp = provider.complete(model_name, messages, tools, max_tokens, temperature,
+                                             on_token=on_token)
+                except TypeError as te:
+                    if "on_token" not in str(te):
+                        raise
+                    comp = provider.complete(model_name, messages, tools, max_tokens, temperature)
             except NotConfigured as e:
                 errors.append(e)
                 self._dead.add(full)

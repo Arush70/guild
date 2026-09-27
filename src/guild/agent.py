@@ -4,10 +4,11 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from .config import Role
 from .providers import Message, Router, ToolCall
+from .schemas import validate
 from .tools import ToolContext, dispatch, specs_for
 from .trace import Trace
 
@@ -106,8 +107,11 @@ def extract_text_tool_calls(text: str, allowed: set[str]) -> list[ToolCall]:
 
 
 class Agent:
+    MAX_REPAIRS = 2  # extra model calls allowed to fix a malformed / invalid final reply
+
     def __init__(self, role: Role, router: Router, ctx: ToolContext, trace: Trace,
-                 *, escalate: bool = False, max_tokens: int = 8192, temperature: float = 0.2):
+                 *, escalate: bool = False, max_tokens: int = 8192, temperature: float = 0.2,
+                 on_token: Callable[[str, str], None] | None = None):
         self.role = role
         self.router = router
         self.ctx = ctx
@@ -116,8 +120,22 @@ class Agent:
         self.slot = role.escalation_slot if self.escalate else role.slot
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.on_token = on_token  # (role, text_chunk) -> None; used for live streaming
 
-    def run(self, user_prompt: str, *, context_blocks: dict[str, str] | None = None) -> AgentResult:
+    def _complete(self, messages: list[Message], tools, *, temperature: float | None = None):
+        cb = (lambda chunk: self.on_token(self.role.name, chunk)) if self.on_token else None
+        comp = self.router.complete(self.slot, messages, tools, max_tokens=self.max_tokens,
+                                    temperature=self.temperature if temperature is None else temperature,
+                                    role=self.role.name, on_token=cb)
+        rec = self.router.tracker.calls[-1]
+        self.trace.model_call(role=self.role.name, slot=self.slot, model=comp.model,
+                              input_tokens=comp.usage.input_tokens, output_tokens=comp.usage.output_tokens,
+                              usd=rec.usd, latency_s=rec.latency_s, n_tool_calls=len(comp.message.tool_calls),
+                              stop_reason=comp.stop_reason, content_preview=comp.message.content)
+        return comp
+
+    def run(self, user_prompt: str, *, context_blocks: dict[str, str] | None = None,
+            job: str = "default") -> AgentResult:
         messages: list[Message] = [Message("system", self.role.system_prompt)]
         if context_blocks:
             ctx_text = "\n\n".join(f"### {k}\n{v}" for k, v in context_blocks.items() if v)
@@ -131,14 +149,8 @@ class Agent:
         last_text = ""
 
         for _ in range(self.role.max_tool_calls + 2):
-            comp = self.router.complete(self.slot, messages, tools, max_tokens=self.max_tokens,
-                                        temperature=self.temperature, role=self.role.name)
+            comp = self._complete(messages, tools)
             model_used = comp.model
-            rec = self.router.tracker.calls[-1]
-            self.trace.model_call(role=self.role.name, slot=self.slot, model=comp.model,
-                                  input_tokens=comp.usage.input_tokens, output_tokens=comp.usage.output_tokens,
-                                  usd=rec.usd, latency_s=rec.latency_s, n_tool_calls=len(comp.message.tool_calls),
-                                  stop_reason=comp.stop_reason, content_preview=comp.message.content)
             messages.append(comp.message)
             last_text = comp.message.content
 
@@ -179,19 +191,25 @@ class Agent:
                                      result_preview=result, ok=ok)
                 messages.append(Message("tool", result, tool_call_id=tc.id, name=tc.name))
 
-        data = extract_json(last_text)
-        if data is None and last_text:
-            # one repair attempt: ask for JSON only
-            messages.append(Message("user", "Your reply must be a single JSON object as specified. Reply with only the JSON."))
-            comp = self.router.complete(self.slot, messages, None, max_tokens=self.max_tokens,
-                                        temperature=0.0, role=self.role.name)
-            rec = self.router.tracker.calls[-1]
-            self.trace.model_call(role=self.role.name, slot=self.slot, model=comp.model,
-                                  input_tokens=comp.usage.input_tokens, output_tokens=comp.usage.output_tokens,
-                                  usd=rec.usd, latency_s=rec.latency_s, n_tool_calls=0,
-                                  stop_reason=comp.stop_reason, content_preview=comp.message.content)
+        # ---- final reply: parse, validate against the role's contract, repair if needed
+        data, error = self._parse_and_validate(last_text, job)
+        repairs = 0
+        while data is None and repairs < self.MAX_REPAIRS:
+            repairs += 1
+            self.trace.emit("note", role=self.role.name, msg=f"invalid final reply ({error}); asking for repair {repairs}")
+            messages.append(Message("user",
+                "Your reply did not match the required JSON contract:\n" + (error or "no JSON object found")
+                + "\n\nReply again with ONLY the corrected JSON object, exactly as specified in your instructions."))
+            comp = self._complete(messages, None, temperature=0.0)
+            messages.append(comp.message)
             last_text = comp.message.content
-            data = extract_json(last_text)
+            data, error = self._parse_and_validate(last_text, job)
 
         return AgentResult(role=self.role.name, model=model_used, raw=last_text, data=data,
                            tool_calls=self.ctx.tool_calls_made, escalated=self.escalate, history=messages)
+
+    def _parse_and_validate(self, text: str, job: str):
+        raw = extract_json(text)
+        if raw is None:
+            return None, "no JSON object found in the reply"
+        return validate(self.role.name, job, raw)

@@ -69,8 +69,11 @@ def test_plan_then_run_via_api(client):
     assert s["plan"]["tasks"][0]["status"] == "done"
     runs = client.get("/api/runs").json()
     assert len(runs) == 2 and runs[0]["calls"] > 0
-    detail = client.get(f"/api/runs/{runs[0]['id']}").json()
-    assert detail[0]["kind"] == "run_start" and detail[-1]["kind"] == "run_end"
+    run_with_engineer = next(r for r in runs if "implement" in r["phases"])
+    detail = client.get(f"/api/runs/{run_with_engineer['id']}").json()
+    ev = detail["events"]
+    assert ev[0]["kind"] == "run_start" and ev[-1]["kind"] == "run_end"
+    assert "engineer" in detail["by_role"] and detail["by_role"]["engineer"]["calls"] > 0
 
 
 def test_conflict_when_busy(project):

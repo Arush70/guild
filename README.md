@@ -20,6 +20,10 @@ you ──goal──▶ Lead ──tasks──▶ Engineer ──branch──▶
 - **Fallback chains.** Every slot lists candidates in order; unreachable or unpaid ones are
   skipped. Escalates the Engineer to a stronger model after repeated failures.
 - **Deterministic verification.** Tests are run by guild, not by a model, so a pass is a real pass.
+- **Validated outputs.** Every role's reply is checked against a schema; malformed replies are
+  sent back with the error for repair, so weak models degrade gracefully instead of derailing.
+- **Hardware-aware setup.** `guild init` reads your VRAM/RAM and Ollama and writes a profile
+  with models that actually fit — no 30b models on an 8 GB GPU.
 - **Small-model friendly.** If a local model writes a tool call as text instead of using the protocol, guild executes it anyway.
 - **Guardrails.** Tools are scoped to the project directory. Reviewers are read-only. The
   Writer can only touch Markdown. API keys are stripped from every subprocess. Nothing is
@@ -36,11 +40,11 @@ MIT licensed. Python 3.10+.
 ## Quick start
 
 ```bash
-pip install guild-ai            # or: pip install -e . from a clone
+pip install "guild-ai[ui]"       # or: pip install -e ".[dev]" from a clone
 
 cd your-project
-guild init . --profile free      # creates .guild/config.yaml
-guild doctor                     # shows which models are reachable
+guild init                       # wizard: detects GPU/RAM, Ollama, keys, test runner → picks models that fit
+guild doctor                     # shows which models are reachable and what to pull
 guild plan "Add a REST endpoint that returns the top 10 users by score, with tests"
 guild run                        # runs the next task: engineer → verify → review → docs
 git diff main...guild/t1-...     # inspect the branch, then merge it yourself
@@ -87,11 +91,12 @@ pip install "guild-ai[ui]"      # adds fastapi + uvicorn
 cd your-project && guild ui     # opens http://127.0.0.1:7331
 ```
 
-Everything the CLI does, in a browser tab: type a goal and press **plan**, edit or reorder
-tasks, press **run**, and watch each agent light up as it works — every model call, tool call,
-test result and review decision streams in live. The **doctor** panel shows which models are
-ready; **runs & cost** shows what each run consumed. It binds to localhost only and runs in
-the same process as the CLI, so there's nothing to deploy.
+Everything the CLI does, in a browser tab: type a goal and press **plan**, edit tasks or
+tick several and **run selected**, and watch each agent work — model output streams live,
+every tool call, test result and review decision appears as it happens. When a task is
+accepted, **diff** shows the branch against main and **merge** merges it (guild never merges
+on its own). Click any run under **runs & cost** for a full timeline with per-role tokens
+and cost. Binds to localhost only; nothing to deploy.
 
 ## Commands
 
@@ -107,6 +112,7 @@ the same process as the CLI, so there's nothing to deploy.
 | `guild cost` | token + estimated cost table from saved traces |
 | `guild roles` | list roles and profiles (built-in + project overrides) |
 | `guild ui [--port 7331]` | local web dashboard |
+| `guild watch [--roles critic,security,performance] [--once]` | review every new commit as it lands |
 
 `-p PROFILE` overrides the profile for one command. `-C DIR` runs against another project.
 
@@ -121,6 +127,8 @@ the same process as the CLI, so there's nothing to deploy.
 | **security** | reasoner | read, search, diff, shell (read-only) | secrets, injection, deps, privacy, CI/supply-chain |
 | **docs** | cheap | read, write (Markdown only) | README / CHANGELOG / docs after each accepted task |
 | **researcher** | cheap | read, search, web | "how should we do X?" with trade-offs and sources |
+| **performance** | reasoner | read, search, diff, shell (read-only) | complexity, N+1, memory, blocking I/O — via `ask` or `watch` |
+| **kaggle** | frontier | read, search, web | turns a competition brief into a baseline + CV + submission plan |
 
 Add your own: copy any `src/guild/data/roles/*.yaml` into `.guild/roles/`, edit the prompt,
 slot and tools, and add its name to `roles_enabled` in `.guild/config.yaml`. Ideas: a
@@ -180,12 +188,18 @@ Traces may contain code excerpts, so `guild init` git-ignores them.
 ## Using it for a Kaggle competition
 
 ```bash
-guild init . --profile lite
-guild plan "Build a baseline for this competition, a CV pipeline and a submission script" \
-           --context competition_brief.md
-guild ask researcher "What approaches won similar tabular competitions recently?"
-guild run --all
+guild init                       # pick lite if you have an Anthropic key; the kaggle role wants a strong model
+guild ask kaggle "Plan a baseline for this competition" --context competition_brief.md   # or paste the brief in the dashboard
+guild run --all                  # T1: data + CV script, T2: baseline + submission.csv, then experiments
 ```
+
+The `kaggle` role produces a plan in the same format as the Lead, so its tasks run through
+the normal engineer → verify → review loop.
+
+## In CI
+
+`docs/github-action.yml` posts a Critic + Security review on every pull request using free
+Gemini (and optionally DeepSeek) keys. Copy it into your repo's `.github/workflows/`.
 
 ## Safety model
 
@@ -204,7 +218,7 @@ This is still an LLM writing code: read the diff before you merge.
 ```bash
 git clone https://github.com/<you>/guild && cd guild
 pip install -e ".[dev]"
-pytest              # 16 tests, no API needed (scripted fake provider)
+pytest              # ~50 tests, no API needed (scripted fake provider)
 ```
 
 Layout:
@@ -215,7 +229,9 @@ src/guild/
   ui/server.py      FastAPI dashboard (guild ui) + SSE event hub
   ui/index.html     the dashboard page (no build step)
   workflow.py       Guild: plan / run_task / ask
-  agent.py          one role's tool-calling loop
+  agent.py          one role's tool-calling loop + repair retries
+  schemas.py        output contracts per role (pydantic)
+  hardware.py       GPU/RAM/Ollama detection, model recommendations, test-runner detection
   config.py         Profile / Role / ProjectConfig loading
   trace.py          JSONL trace
   sandbox.py        local + docker command runners
@@ -225,14 +241,18 @@ src/guild/
   data/profiles/    free / lite / pro
 ```
 
+## Docs
+
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Adding a role](docs/ADDING_A_ROLE.md)
+- [CHANGELOG](CHANGELOG.md)
+
 ## Roadmap
 
-- [ ] `guild watch` — re-run Critic/Security on every commit
-- [ ] parallel engineers on independent tasks
-- [ ] streaming output
-- [ ] VS Code extension
-- [ ] trace viewer inside the dashboard
-- [ ] more built-in roles (performance, ux, data-quality)
+- [ ] parallel engineers on independent tasks (per-task worktrees)
+- [ ] `ux` and `data-quality` reviewer roles
+- [ ] VS Code extension (the dashboard's HTTP API is the integration point)
+- [ ] optional CI job that runs the loop against a real Ollama
 
 ## License
 

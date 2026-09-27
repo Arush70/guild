@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "guild-ai"
-version = "0.1.0"
+version = "0.2.0"
 description = "A budget-aware multi-agent coding team: lead, engineer, critic, verifier, security, docs — configured per profile (free / lite / pro)."
 readme = "README.md"
 license = { text = "MIT" }

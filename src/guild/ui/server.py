@@ -47,9 +47,13 @@ class Hub:
         self.job: Job | None = None
         self.subscribers: list[queue.Queue] = []
         self.history: list[dict] = []  # last N events for late joiners
+        self._tok_buf: list[str] = []
+        self._tok_role = ""
+        self._tok_last = 0.0
 
     def publish(self, ev: dict) -> None:
         ev.setdefault("ts", time.time())
+        self.flush_tokens()  # keep ordering: pending tokens go out before the next event
         with self.lock:
             self.history.append(ev)
             self.history = self.history[-500:]
@@ -72,6 +76,31 @@ class Hub:
 
     def busy(self) -> bool:
         return self.job is not None and self.job.status == "running"
+
+    # -- streaming tokens: coalesce into ~80ms batches so the browser isn't flooded
+    def token(self, role: str, chunk: str) -> None:
+        with self.lock:
+            if self._tok_role != role:
+                self._flush_tokens_locked()
+                self._tok_role = role
+            self._tok_buf.append(chunk)
+            due = time.time() - self._tok_last >= 0.08
+        if due:
+            self.flush_tokens()
+
+    def flush_tokens(self) -> None:
+        with self.lock:
+            self._flush_tokens_locked()
+
+    def _flush_tokens_locked(self) -> None:
+        if not self._tok_buf:
+            return
+        text = "".join(self._tok_buf)
+        self._tok_buf.clear()
+        self._tok_last = time.time()
+        ev = {"kind": "token", "role": self._tok_role, "text": text, "ts": time.time()}
+        for q in list(self.subscribers):
+            q.put(ev)  # tokens are not kept in history — they're ephemeral
 
     def start(self, kind: str, fn) -> Job:
         if self.busy():
@@ -148,7 +177,8 @@ def create_app(root: Path) -> FastAPI:
         from ..workflow import Guild
         cfg = load_project_config(root)
         prof = load_profile(profile_override or cfg.profile, root)
-        g = Guild(root, cfg, prof, report=lambda lvl, msg: hub.publish({"kind": "report", "level": lvl, "msg": msg}))
+        g = Guild(root, cfg, prof, report=lambda lvl, msg: hub.publish({"kind": "report", "level": lvl, "msg": msg}),
+                  on_token=hub.token)
         g.trace.echo = lambda ev: hub.publish(dict(ev))
         return g
 
@@ -158,6 +188,9 @@ def create_app(root: Path) -> FastAPI:
 
     @app.get("/api/state")
     def state():
+        # snapshot job status BEFORE reading files, so "not busy" implies the plan is on disk
+        busy = hub.busy()
+        job = _jsonable(hub.job) if hub.job else None
         cfg = load_project_config(root)
         plan = _read_plan(root)
         warnings: list[str] = []
@@ -170,8 +203,7 @@ def create_app(root: Path) -> FastAPI:
         return {
             "root": str(root), "config": cfg.model_dump(), "plan_warnings": warnings,
             "profiles": list_available("profiles", root), "roles": list_available("roles", root),
-            "plan": plan, "busy": hub.busy(),
-            "job": _jsonable(hub.job) if hub.job else None,
+            "plan": plan, "busy": busy, "job": job,
         }
 
     @app.get("/api/doctor")
@@ -276,10 +308,64 @@ def create_app(root: Path) -> FastAPI:
         os.replace(tmp, plan_p)
         return plan
 
+    # ---- branches: review & merge from the dashboard (human decision, guild never auto-merges)
+    def _wf():
+        from ..workflow import Guild
+        cfg = load_project_config(root)
+        prof = load_profile(cfg.profile, root)
+        g = Guild.__new__(Guild)  # git helpers only; no trace/run dir created
+        g.root, g.cfg, g.profile, g.dry_run = root, cfg, prof, False
+        return g
+
+    @app.get("/api/branches/{task_id}/diff")
+    def branch_diff(task_id: str):
+        plan = _read_plan(root) or {}
+        task = next((t for t in plan.get("tasks", []) if t["id"] == task_id), None)
+        if not task or not task.get("branch"):
+            raise HTTPException(404, "task has no branch")
+        return _wf().branch_diff(task["branch"])
+
+    @app.post("/api/branches/{task_id}/merge")
+    def branch_merge(task_id: str):
+        if hub.busy():
+            raise HTTPException(409, "a job is running")
+        plan = _read_plan(root) or {}
+        task = next((t for t in plan.get("tasks", []) if t["id"] == task_id), None)
+        if not task or not task.get("branch"):
+            raise HTTPException(404, "task has no branch")
+        res = _wf().merge_branch(task["branch"])
+        if res.get("ok"):
+            task["merged"] = True
+            plan_p = root / GUILD_DIR / "plan.json"
+            tmp = plan_p.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            os.replace(tmp, plan_p)
+            hub.publish({"kind": "report", "level": "info", "msg": f"merged {task['branch']} into {res['base']}"})
+        return res
+
+    @app.post("/api/branches/{task_id}/discard")
+    def branch_discard(task_id: str):
+        if hub.busy():
+            raise HTTPException(409, "a job is running")
+        plan = _read_plan(root) or {}
+        task = next((t for t in plan.get("tasks", []) if t["id"] == task_id), None)
+        if not task or not task.get("branch"):
+            raise HTTPException(404, "task has no branch")
+        res = _wf().discard_branch(task["branch"])
+        if res.get("ok"):
+            task["branch"] = None
+            task["status"] = "todo"
+            plan_p = root / GUILD_DIR / "plan.json"
+            tmp = plan_p.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            os.replace(tmp, plan_p)
+        return res
+
     @app.get("/api/runs")
     def runs():
         out = []
-        for p in sorted((root / GUILD_DIR / "runs").glob("*/trace.jsonl"), reverse=True)[:50]:
+        paths = sorted((root / GUILD_DIR / "runs").glob("*/trace.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for p in paths[:50]:
             ev = read_trace(p)
             calls = [e for e in ev if e["kind"] == "model_call"]
             start = next((e for e in ev if e["kind"] == "run_start"), {})
@@ -293,10 +379,28 @@ def create_app(root: Path) -> FastAPI:
 
     @app.get("/api/runs/{run_id}")
     def run_detail(run_id: str):
-        p = root / GUILD_DIR / "runs" / run_id / "trace.jsonl"
-        if not p.exists() or "/" in run_id or ".." in run_id:
+        if "/" in run_id or ".." in run_id or "\\" in run_id:
             raise HTTPException(404)
-        return read_trace(p)
+        p = root / GUILD_DIR / "runs" / run_id / "trace.jsonl"
+        if not p.exists():
+            raise HTTPException(404)
+        events = read_trace(p)
+        by_role: dict[str, dict] = {}
+        for e in events:
+            if e["kind"] == "model_call":
+                r = by_role.setdefault(e["role"], {"calls": 0, "input_tokens": 0, "output_tokens": 0, "usd": 0.0, "latency_s": 0.0, "models": set()})
+                r["calls"] += 1
+                r["input_tokens"] += e["input_tokens"]
+                r["output_tokens"] += e["output_tokens"]
+                r["usd"] += e.get("usd", 0)
+                r["latency_s"] += e.get("latency_s", 0)
+                r["models"].add(e["model"])
+        for r in by_role.values():
+            r["models"] = sorted(r["models"])
+            r["usd"] = round(r["usd"], 5)
+            r["latency_s"] = round(r["latency_s"], 1)
+        return {"events": events, "by_role": by_role,
+                "started": events[0]["ts"] if events else 0, "ended": events[-1]["ts"] if events else 0}
 
     @app.get("/api/events")
     def events():
