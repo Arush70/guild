@@ -64,7 +64,8 @@ def test_init_wizard_noninteractive(tmp_path: Path, monkeypatch):
 
 def test_init_wizard_interactive_answers(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(hw, "detect", lambda: _machine(vram=8, keys={"anthropic": True}))
-    r = CliRunner().invoke(app, ["init", str(tmp_path)], input="lite\npython -m pytest -q\n")
+    r = CliRunner().invoke(app, ["init", str(tmp_path)], input="lite\npython -m pytest -q\ny\n")
     assert r.exit_code == 0, r.output
     assert "profile: lite" in (tmp_path / ".guild" / "config.yaml").read_text()
     assert (tmp_path / ".guild" / "profiles" / "lite.yaml").exists()
+    assert (tmp_path / ".git").is_dir()  # offered and accepted git init

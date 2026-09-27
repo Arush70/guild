@@ -117,6 +117,15 @@ def init(
     if sandbox == "docker" and not hw.docker:
         console.print("[yellow]docker not found; using local sandbox[/yellow]"); sandbox = "local"
 
+    # -- git: guild needs a repo for branches/merge
+    if hw.git and not (root / ".git").is_dir():
+        do_init = yes or typer.confirm("This folder is not a git repository. Initialise one? (needed for branches)", default=True)
+        if do_init:
+            import subprocess
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=False)
+            if (root / ".git").is_dir():
+                console.print("[green]initialised git repository (branch main)[/green]")
+
     # -- write config + tailored profile
     cfg = ProjectConfig(profile=profile, test_command=test_command, sandbox=sandbox)
     p = save_project_config(root, cfg)
