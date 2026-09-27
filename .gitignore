@@ -9,3 +9,10 @@ venv/
 .pytest_cache/
 .ruff_cache/
 .guild/runs/
+
+# OS / editor / notebook clutter
+.DS_Store
+Thumbs.db
+.ipynb_checkpoints/
+.idea/
+.vscode/
