@@ -21,7 +21,7 @@ shares its JSONL trace discipline with his dissertation project (MACS) but is a 
 ```
 src/guild/
   cli.py              typer commands: init(wizard) doctor plan status run review ask cost roles watch ui
-  workflow.py         Guild class: plan(), run_task(), run_tasks(), verify(), ask()
+  workflow.py         Guild class: plan(), revise_plan(), run_task(), run_tasks(), verify(), ask(), chat()
   agent.py            one role's tool-calling loop; extract_json; extract_text_tool_calls;
                       validates the final reply against schemas.py and asks for repairs (≤2)
   schemas.py          pydantic output contract per role/job (lenient coercions for small models)
@@ -32,11 +32,12 @@ src/guild/
   tools/registry.py   file/search/shell/git/web tools, scoped to project root
   providers/          openai_compat (Ollama, Groq, Gemini, DeepSeek, OpenRouter, OmniRoute,
                       LiteLLM…), anthropic_provider, router (fallback chain + cost tracking)
-  ui/server.py        FastAPI + SSE hub (events + throttled token stream); branch diff/merge/discard;
-                      run detail with per-role cost.  ui/index.html  single-file dashboard, no build step
-  data/roles/*.yaml   lead engineer critic security docs researcher performance kaggle
+  ui/server.py        FastAPI + SSE hub (events + throttled token stream); switchable project (_State);
+                      /api/fs folder picker, /api/files + /api/file browser, /api/chat, /api/plan/revise;
+                      branch diff/merge/discard; run detail with per-role cost.  ui/index.html  single-file dashboard, no build step
+  data/roles/*.yaml   lead engineer critic security docs researcher performance kaggle assistant(chat, prose)
   data/profiles/*.yaml free lite pro (guild init writes a machine-specific override into .guild/profiles/)
-tests/                49 tests; FakeProvider in conftest.py scripts model replies, no API calls;
+tests/                56 tests; FakeProvider in conftest.py scripts model replies, no API calls;
                       test_robustness.py (schemas/repair/streaming), test_hardware.py (init wizard)
 ```
 

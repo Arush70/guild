@@ -91,12 +91,22 @@ pip install "guild-ai[ui]"      # adds fastapi + uvicorn
 cd your-project && guild ui     # opens http://127.0.0.1:7331
 ```
 
-Everything the CLI does, in a browser tab: type a goal and press **plan**, edit tasks or
-tick several and **run selected**, and watch each agent work — model output streams live,
-every tool call, test result and review decision appears as it happens. When a task is
-accepted, **diff** shows the branch against main and **merge** merges it (guild never merges
-on its own). Click any run under **runs & cost** for a full timeline with per-role tokens
-and cost. Binds to localhost only; nothing to deploy.
+Everything the CLI does, in a browser tab, plus the parts a CLI can't do well:
+
+- **Project picker** — the header shows the folder the team is working in; click it to browse
+  your machine or pick a recent project and switch without restarting.
+- **Chat** — ask the Assistant anything about the code, the plan or what the team did. It reads
+  files, searches and runs tests to answer, streams its reply, and remembers the conversation.
+  It never edits.
+- **Files** — browse and read every file in the project (code, docs, configs).
+- **Plan by prompting** — type "split T2 in two and add input validation" under the plan and
+  the Lead rewrites it, keeping finished tasks.
+- Type a goal → **plan**; tick tasks → **run selected**; model output streams live; every
+  tool call, test result and review decision appears as it happens.
+- When a task is accepted, **diff** shows the branch and **merge** merges it (guild never
+  merges on its own). Click a run under **runs & cost** for a full timeline with per-role cost.
+
+Binds to localhost only; nothing to deploy.
 
 ## Commands
 
@@ -129,6 +139,7 @@ and cost. Binds to localhost only; nothing to deploy.
 | **researcher** | cheap | read, search, web | "how should we do X?" with trade-offs and sources |
 | **performance** | reasoner | read, search, diff, shell (read-only) | complexity, N+1, memory, blocking I/O — via `ask` or `watch` |
 | **kaggle** | frontier | read, search, web | turns a competition brief into a baseline + CV + submission plan |
+| **assistant** | frontier | read, search, diff, tests | the chat: answers questions about the project in prose; read-only |
 
 Add your own: copy any `src/guild/data/roles/*.yaml` into `.guild/roles/`, edit the prompt,
 slot and tools, and add its name to `roles_enabled` in `.guild/config.yaml`. Ideas: a

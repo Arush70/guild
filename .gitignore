@@ -8,4 +8,13 @@ venv/
 .env
 .pytest_cache/
 .ruff_cache/
-.guild/runs/
+
+# guild's own working data — never belongs in THIS repo (run guild from a project folder, not here)
+.guild/
+
+# OS / editor / notebook clutter
+.DS_Store
+Thumbs.db
+.ipynb_checkpoints/
+.idea/
+.vscode/

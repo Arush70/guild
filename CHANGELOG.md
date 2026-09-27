@@ -12,6 +12,8 @@
 - docs: TROUBLESHOOTING.md, ADDING_A_ROLE.md.
 
 ## Unreleased
+- Dashboard: project picker (browse folders / recent projects, switch live), Files panel with viewer, Chat with the read-only Assistant role (streaming, conversation memory), and "revise plan" by prompting.
+- New role: `assistant`. New workflow methods: `Guild.chat()`, `Guild.revise_plan()`.
 - Engineer that reports done without changing any file is asked again, then blocked (never falsely accepted).
 - Engineer prompt: code in the reply is discarded; tools are the only way to change files.
 - Crashes inside a task write an `error` event with traceback to the trace and the dashboard.

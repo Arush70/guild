@@ -501,6 +501,51 @@ class Guild:
                 break
         return outcomes
 
+    # ------------------------------------------------------------------ chat
+    def chat(self, question: str, history: list[dict] | None = None) -> AgentResult:
+        """Conversational Q&A about the project. history: [{"role": "user"|"assistant", "content": str}]."""
+        from .providers import Message as _M
+        self._phase("chat")
+        plan = self.load_plan()
+        blocks = {"Project": self.project_summary()}
+        if plan:
+            blocks["Current plan"] = json.dumps(plan.to_dict(), indent=1)[:6000]
+        prior = [_M(h["role"], h["content"]) for h in (history or [])[-12:] if h.get("content")]
+        return self.agent("assistant").run(question, context_blocks=blocks, prior=prior, expect_json=False)
+
+    # ------------------------------------------------------------------ plan revision
+    def revise_plan(self, instruction: str) -> Plan:
+        """Ask the Lead to rewrite the current plan according to a natural-language instruction."""
+        current = self.load_plan()
+        if current is None:
+            return self.plan(instruction)
+        self._phase("revise_plan", instruction=instruction)
+        res = self.agent("lead").run(
+            "REVISE the current plan according to the owner's instruction. Keep task ids of tasks that "
+            "stay unchanged; keep status/branch of tasks already done. Reply with the FULL updated plan "
+            "in the PLAN JSON format.\n\nOWNER'S INSTRUCTION:\n" + instruction,
+            context_blocks={"Project goal": current.goal, "Current plan (JSON)": json.dumps(current.to_dict(), indent=1),
+                            "Project": self.project_summary()}, job="plan")
+        if not res.ok:
+            raise RuntimeError(f"Lead did not return a plan. Raw reply:\n{res.raw[:2000]}")
+        d = res.data
+        old = {t.id: t for t in current.tasks}
+        tasks = []
+        for i, t in enumerate(d.get("tasks", [])):
+            tid = t.get("id") or f"T{i + 1}"
+            prev = old.get(tid)
+            status = prev.status if prev and prev.status == "done" else "todo"
+            tasks.append(Task(id=tid, title=t.get("title", ""), description=t.get("description", ""),
+                              files=t.get("files", []), done_when=t.get("done_when", ""),
+                              depends_on=t.get("depends_on", []), status=status,
+                              branch=prev.branch if prev else None, notes=prev.notes if prev else ""))
+        plan = Plan(goal=current.goal, roadmap=d.get("roadmap", current.roadmap), tasks=tasks,
+                    risks=d.get("risks", []), questions_for_owner=d.get("questions_for_owner", []),
+                    created=current.created)
+        self.save_plan(plan)
+        self.trace.emit("decision", role="lead", decision="revise_plan", n_tasks=len(tasks))
+        return plan
+
     # ------------------------------------------------------------------ one-off ask
     def ask(self, role_name: str, question: str) -> AgentResult:
         self._phase("ask", role=role_name)
