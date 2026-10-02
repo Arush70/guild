@@ -664,7 +664,13 @@ def watch(
     reviewers = [r.strip() for r in roles.split(",") if r.strip()]
 
     def head() -> str:
-        r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True)
+        r = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         return r.stdout.strip()
 
     def review(sha: str) -> None:

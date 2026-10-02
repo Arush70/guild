@@ -26,7 +26,13 @@ class RunResult:
 
 
 def _clean_env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if not any(h in k.upper() for h in SECRET_HINTS)}
+    env = {k: v for k, v in os.environ.items() if not any(h in k.upper() for h in SECRET_HINTS)}
+    # Child processes (pytest, ruff, the model's commands) print UTF-8 regardless of the console
+    # code page; on Windows the default cp1252 pipe would otherwise mangle or crash on "—" / "✓".
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    return env
 
 
 class LocalSandbox:
@@ -42,7 +48,8 @@ class LocalSandbox:
                 shell=True,
                 cwd=self.root,
                 capture_output=True,
-                text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
                 env=_clean_env(),
             )
@@ -85,7 +92,12 @@ class DockerSandbox:
         args += [self.image, "sh", "-c", command]
         try:
             r = subprocess.run(
-                args, capture_output=True, text=True, timeout=timeout + 15, env=_clean_env()
+                args,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout + 15,
+                env=_clean_env(),
             )
         except subprocess.TimeoutExpired:
             return RunResult(124, f"[timed out after {timeout}s]", timed_out=True)

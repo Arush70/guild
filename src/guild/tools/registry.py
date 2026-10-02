@@ -319,7 +319,14 @@ def _looks_mutating(cmd: str) -> bool:
 
 def _git(ctx: ToolContext, *args: str) -> str:
     try:
-        r = subprocess.run(["git", *args], cwd=ctx.root, capture_output=True, text=True, timeout=60)
+        r = subprocess.run(
+            ["git", *args],
+            cwd=ctx.root,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
     except (OSError, subprocess.TimeoutExpired) as e:
         return f"git error: {e}"
     return (r.stdout + r.stderr).strip()

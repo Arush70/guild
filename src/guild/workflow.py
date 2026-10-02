@@ -338,7 +338,9 @@ class Guild:
 
     # ------------------------------------------------------------------ git helpers
     def _git(self, *args: str, check: bool = False) -> str:
-        r = subprocess.run(["git", *args], cwd=self.root, capture_output=True, text=True)
+        r = subprocess.run(
+            ["git", *args], cwd=self.root, capture_output=True, encoding="utf-8", errors="replace"
+        )
         if check and r.returncode != 0:
             raise RuntimeError(f"git {' '.join(args)} failed: {r.stderr.strip()}")
         return (r.stdout + r.stderr).strip()
