@@ -12,6 +12,8 @@
 - docs: TROUBLESHOOTING.md, ADDING_A_ROLE.md.
 
 ## Unreleased
+- TASK-002: `write_file` on an existing, unread file is refused (read first, then edit or rewrite keeping everything). Files written earlier in the same task are exempt.
+- Verification now collects pytest node ids before the engineer starts; any pre-existing test that disappears fails verification with its name (non-pytest runners: test count must not drop).
 - Project docs as context: PRD/ARCHITECTURE/RULES/TASKS/MEMORY/DECISIONS/DESIGN (also CLAUDE.md, .cursorrules) are read into every role's context when present; `guild init --docs` scaffolds them; Docs role keeps MEMORY/TASKS current.
 - This repo now has its own docs set (docs/PRD, ARCHITECTURE, DESIGN, DECISIONS, MEMORY, TEST_PLAN, SECURITY; RULES.md; TASKS.md) for Claude Code handoff.
 - Engineer: a first "blocked" is pushed back once with the facts (missing files must be created; failing tests are the work); only a second block counts. Task brief lists files that don't exist yet.

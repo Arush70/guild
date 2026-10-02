@@ -29,6 +29,7 @@ class ToolContext:
     readonly: bool = False
     tool_calls_made: int = 0
     files_written: set[str] = field(default_factory=set)
+    files_read: set[str] = field(default_factory=set)
 
     def resolve(self, rel: str) -> Path:
         p = (self.root / rel).resolve()
@@ -119,6 +120,7 @@ def read_file(ctx: ToolContext, path: str, start_line: int | None = None, end_li
         text = p.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         return f"error: {e}"
+    ctx.files_read.add(_norm(path))
     lines = text.splitlines()
     s = max(1, start_line or 1)
     e = min(len(lines), end_line or len(lines))
@@ -132,11 +134,22 @@ def read_file(ctx: ToolContext, path: str, start_line: int | None = None, end_li
 def write_file(ctx: ToolContext, path: str, content: str) -> str:
     ctx.check_write(path)
     p = ctx.resolve(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
     existed = p.exists()
+    key = _norm(path)
+    if existed and p.stat().st_size > 0 and key not in ctx.files_read and key not in ctx.files_written:
+        # Small models happily overwrite files they never looked at, deleting existing code and
+        # tests. Force a read first so the rewrite can preserve what's there.
+        return (f"refused: {path} already exists and you have not read it. Call read_file(\"{path}\") "
+                f"first, then either edit_file to change specific parts or write_file with the FULL "
+                f"updated content that keeps everything not covered by the task.")
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
-    ctx.files_written.add(path)
+    ctx.files_written.add(key)
     return f"{'overwrote' if existed else 'created'} {path} ({len(content)} chars)"
+
+
+def _norm(path: str) -> str:
+    return os.path.normpath(path).replace("\\", "/").lstrip("./") or path
 
 
 @tool("edit_file", "Replace an exact substring in a file with new text. old_text must occur exactly once.",
@@ -157,7 +170,7 @@ def edit_file(ctx: ToolContext, path: str, old_text: str, new_text: str) -> str:
     if n > 1:
         return f"old_text occurs {n} times; include more context to make it unique"
     p.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
-    ctx.files_written.add(path)
+    ctx.files_written.add(_norm(path))
     return f"edited {path}"
 
 
