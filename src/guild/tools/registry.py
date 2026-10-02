@@ -288,8 +288,12 @@ def search(
     mutating=True,
 )
 def run_command(ctx: ToolContext, command: str, timeout: int = 120) -> str:
-    if ctx.readonly and _looks_mutating(command):
-        return "refused: this role is read-only and the command looks like it modifies state"
+    if ctx.readonly and not _readonly_allowed(command):
+        return (
+            "refused: this role is read-only; only inspection commands are allowed "
+            "(pytest, git log/show/diff/status, grep/rg, ls/cat/head/tail, ruff check, "
+            "mypy, pip list/show/audit, bandit)"
+        )
     res = ctx.sandbox.run(command, timeout=min(timeout, 600))
     return _clip(f"exit={res.returncode}\n{res.output}")
 
@@ -305,13 +309,73 @@ def run_tests(ctx: ToolContext, extra_args: str = "") -> str:
     return _clip(f"$ {cmd}\nexit={res.returncode}\n{res.output}")
 
 
-_MUTATING_RX = re.compile(
-    r"\b(rm|mv|cp|chmod|chown|git\s+(commit|push|reset|checkout|clean)|pip\s+install|npm\s+install|>|>>|tee)\b"
+# Read-only roles may only run inspection commands. An allowlist of command prefixes is used
+# instead of a deny-list: "echo x > f", "python -c ...", "sed -i", "del" etc. are all refused.
+_READONLY_PREFIXES = (
+    "pytest",
+    "python -m pytest",
+    "python3 -m pytest",
+    "py -m pytest",
+    "python -m unittest",
+    "python3 -m unittest",
+    "ruff check",
+    "ruff format --check",
+    "mypy",
+    "pyright",
+    "flake8",
+    "pylint",
+    "bandit",
+    "pip-audit",
+    "pip audit",
+    "pip list",
+    "pip show",
+    "pip freeze",
+    "npm test",
+    "npm audit",
+    "npx tsc --noEmit",
+    "cargo test",
+    "cargo clippy",
+    "go test",
+    "go vet",
+    "git log",
+    "git show",
+    "git diff",
+    "git status",
+    "git blame",
+    "git ls-files",
+    "git grep",
+    "git branch",
+    "grep",
+    "rg",
+    "ls",
+    "dir",
+    "cat",
+    "type",
+    "head",
+    "tail",
+    "wc",
+    "find",
+    "tree",
+    "sort",
+    "uniq",
 )
+_SHELL_META_RX = re.compile(r"(\|\||&&|;|>|<|`|\$\(|\bsudo\b|\bxargs\b)")
+
+
+def _readonly_allowed(cmd: str) -> bool:
+    c = cmd.strip()
+    if not c or _SHELL_META_RX.search(c) or "--fix" in c or "--delete" in c:
+        return False
+    for seg in c.split("|"):  # plain pipelines like "pytest -q | tail -20" are fine
+        seg = seg.strip()
+        if not any(seg == p or seg.startswith(p + " ") for p in _READONLY_PREFIXES):
+            return False
+    return True
 
 
 def _looks_mutating(cmd: str) -> bool:
-    return bool(_MUTATING_RX.search(cmd))
+    """Kept for callers/tests: True when a read-only role would be refused."""
+    return not _readonly_allowed(cmd)
 
 
 # ---------------------------------------------------------------------------- git

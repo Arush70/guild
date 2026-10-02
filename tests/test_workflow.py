@@ -683,3 +683,104 @@ def test_norm_keeps_leading_dot_names():
     assert _norm("./app.py") == "app.py"
     assert _norm("src\\guild\\x.py") == "src/guild/x.py"
     assert _norm(".github/x") == _norm("./.github/x")
+
+
+def test_plan_json_with_unknown_keys_still_loads(project, cfg, profile):
+    """The dashboard writes task['merged']; older plans may carry other keys. Never crash."""
+    import json
+
+    g = _guild(project, cfg, profile, FakeProvider({}))
+    plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
+    g.save_plan(plan)
+    d = json.loads(g.plan_path().read_text())
+    d["tasks"][0]["merged"] = True
+    d["tasks"][0]["future_field"] = {"x": 1}
+    g.plan_path().write_text(json.dumps(d))
+    loaded = g.load_plan()
+    g.close()
+    assert loaded.tasks[0].merged is True and loaded.tasks[0].id == "T1"
+
+
+def test_reviewer_without_valid_json_is_not_an_approval(project, cfg, profile):
+    """7b/r1 critics often reply in prose; silence must never count as approve."""
+    fake = FakeProvider(
+        {
+            "engineer": ENGINEER_GOOD + ENGINEER_GOOD,
+            "critic": ["Looks fine to me!"] * 3 + [APPROVE],
+            "security": [APPROVE, APPROVE],
+            "lead": [LEAD_ACCEPT],
+            "docs": DOCS,
+        }
+    )
+    g = _guild(project, cfg, profile, fake)
+    plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
+    out = g.run_task(plan, plan.tasks[0])
+    g.close()
+    # round 1: critic text x3 (reply + 2 repairs) -> request_changes; round 2: approve
+    assert out.rounds == 2 and out.accepted
+    notes = [e["msg"] for e in read_trace(g.trace.path) if e["kind"] == "note"]
+    assert any("no valid JSON" in n for n in notes)
+
+
+def test_assistant_and_performance_are_read_only(project, cfg, profile):
+    fake = FakeProvider(
+        {
+            "assistant": [[("run_command", {"command": "echo pwned > app.py"})], {"answer": "x"}],
+        }
+    )
+    g = _guild(project, cfg, profile, fake)
+    assert g._ctx(g.role("assistant")).readonly
+    assert g._ctx(g.role("performance")).readonly
+    assert not g._ctx(g.role("engineer")).readonly
+    g.agent("assistant").run("hi", expect_json=False)
+    g.close()
+    assert "pwned" not in (project / "app.py").read_text()
+
+
+def test_commit_keeps_caches_out_and_rejected_task_returns_to_base(project, cfg, profile):
+    import subprocess
+
+    def git(*a):
+        return subprocess.run(["git", *a], cwd=project, capture_output=True, text=True).stdout
+
+    base = git("rev-parse", "--abbrev-ref", "HEAD").strip()
+    (project / "__pycache__").mkdir()
+    # accepted task: caches must not be committed; guild stays on the task branch
+    fake = FakeProvider(
+        {
+            "engineer": ENGINEER_GOOD,
+            "critic": [APPROVE],
+            "security": [APPROVE],
+            "lead": [LEAD_ACCEPT],
+            "docs": DOCS,
+        }
+    )
+    g = _guild(project, cfg, profile, fake)
+    plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
+    out = g.run_task(plan, plan.tasks[0])
+    g.close()
+    assert out.accepted
+    tracked = git("ls-files")
+    assert ".pyc" not in tracked and "__pycache__" not in tracked and ".pytest_cache" not in tracked
+    assert git("rev-parse", "--abbrev-ref", "HEAD").strip() == out.task.branch
+
+    # rejected task: work stays on its branch, HEAD goes back to where it started
+    before = git("rev-parse", "--abbrev-ref", "HEAD").strip()
+    bad = {"verdict": "block", "findings": [{"issue": "no"}], "summary": "no"}
+    fake = FakeProvider(
+        {
+            "engineer": ENGINEER_GOOD * 4,
+            "critic": [bad] * 4,
+            "security": [APPROVE] * 4,
+            "lead": [{"decision": "REVISE", "notes": "", "improvements": []}],
+        }
+    )
+    g = _guild(project, cfg, profile, fake)
+    t2 = Task(id="T2", title="second", description="x", files=["app.py"], done_when="tests pass")
+    out2 = g.run_task(Plan(goal="g", roadmap=[], tasks=[t2]), t2)
+    g.close()
+    assert not out2.accepted and out2.task.branch
+    assert git("rev-parse", "--abbrev-ref", "HEAD").strip() == before
+    assert out2.task.branch in git("branch", "--list", "guild/*")
+    assert base  # base branch still exists untouched
+    assert git("rev-parse", "--abbrev-ref", "HEAD").strip() != out2.task.branch

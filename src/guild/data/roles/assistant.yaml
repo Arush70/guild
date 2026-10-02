@@ -2,6 +2,7 @@ name: assistant
 title: Assistant
 slot: frontier
 tools: [read_file, list_files, search, git_diff, git_status, run_tests, run_command]
+readonly: true
 max_tool_calls: 20
 description: >
   Conversational helper for the owner. Answers questions about the codebase, the plan and the

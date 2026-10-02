@@ -3,7 +3,7 @@ title: Technical Writer
 slot: cheap
 tools: [read_file, write_file, edit_file, list_files, search, git_diff]
 max_tool_calls: 25
-write_allowlist: ["README.md", "docs/**", "CHANGELOG.md", "**/*.md"]
+write_allowlist: ["*.md", "docs/**", "**/*.md"]
 description: >
   Keeps README, docs/ and CHANGELOG accurate after each accepted change. Writes for the
   next developer, not for marketing.

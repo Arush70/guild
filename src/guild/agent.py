@@ -33,9 +33,12 @@ class AgentResult:
 _JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
 
 
+_THINK_RX = re.compile(r"<think>.*?</think>", re.S)
+
+
 def extract_json(text: str) -> dict[str, Any] | None:
     """Pull the first JSON object out of a model reply, tolerating fences and prose."""
-    text = text.strip()
+    text = _THINK_RX.sub("", text).strip()
     if not text:
         return None
     for cand in (text, *(m.group(1) for m in _JSON_BLOCK.finditer(text))):
@@ -45,16 +48,24 @@ def extract_json(text: str) -> dict[str, Any] | None:
                 return v
         except json.JSONDecodeError:
             pass
-    # last resort: outermost braces
-    start, end = text.find("{"), text.rfind("}")
-    if 0 <= start < end:
+    # last resort: every balanced top-level {...} in the text; the final one is the answer
+    # (deepseek-r1 style replies put reasoning, often with braces, before the JSON)
+    dec = json.JSONDecoder()
+    found: list[dict[str, Any]] = []
+    i = 0
+    while True:
+        i = text.find("{", i)
+        if i < 0:
+            break
         try:
-            v = json.loads(text[start : end + 1])
-            if isinstance(v, dict):
-                return v
+            v, end = dec.raw_decode(text, i)
         except json.JSONDecodeError:
-            return None
-    return None
+            i += 1
+            continue
+        if isinstance(v, dict):
+            found.append(v)
+        i = end
+    return found[-1] if found else None
 
 
 _TOOL_KEYS = (

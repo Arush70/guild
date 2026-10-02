@@ -2,6 +2,7 @@ name: performance
 title: Performance Reviewer
 slot: reasoner
 tools: [read_file, list_files, search, git_diff, run_command]
+readonly: true
 max_tool_calls: 25
 description: >
   Reviews a change for performance problems: algorithmic complexity, N+1 queries, repeated

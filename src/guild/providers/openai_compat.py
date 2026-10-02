@@ -120,10 +120,13 @@ class OpenAICompatProvider:
         if self._client is None:
             from openai import OpenAI
 
+            # Local servers (Ollama on a laptop GPU) can take many minutes for a long reply or
+            # a deepseek-r1 "think" block; the non-streaming CLI path must not give up at 3 min.
+            local = self.provider in {"ollama", "omniroute", "litellm", "custom"}
             self._client = OpenAI(
                 base_url=self.endpoint.base_url,
                 api_key=self._key(model),
-                timeout=180.0,
+                timeout=float(os.environ.get("GUILD_MODEL_TIMEOUT", 900 if local else 180)),
                 max_retries=1,
             )
         return self._client

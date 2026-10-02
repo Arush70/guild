@@ -44,10 +44,53 @@ def test_free_profile_has_no_paid_models():
         ('prefix {"a": {"b": 2}} suffix', {"a": {"b": 2}}),
         ("no json here", None),
         ("", None),
+        # deepseek-r1: reasoning (with braces) before the answer
+        ('<think>plan: {step: 1}</think>\n{"verdict": "approve"}', {"verdict": "approve"}),
+        ('I think {"a": 1} is wrong, final: {"a": 2}', {"a": 2}),
+        (
+            '{"status": "done", "summary": "wrote {x}"} ok',
+            {"status": "done", "summary": "wrote {x}"},
+        ),
     ],
 )
 def test_extract_json(text, expected):
     assert extract_json(text) == expected
+
+
+def test_readonly_command_allowlist():
+    from guild.tools.registry import _readonly_allowed
+
+    for ok in ("pytest -q", "python -m pytest -q | tail -20", "git log --oneline", "rg TODO src"):
+        assert _readonly_allowed(ok), ok
+    for bad in (
+        "echo x > app.py",
+        "python -c \"open('a','w').write('x')\"",
+        "sed -i s/a/b/ app.py",
+        "git reset --hard",
+        "pip install requests",
+        "del app.py",
+        "pytest -q; rm -rf src",
+        "ruff check --fix .",
+    ):
+        assert not _readonly_allowed(bad), bad
+
+
+def test_plan_schema_drops_dangling_dependencies():
+    from guild.schemas import validate
+
+    d, err = validate(
+        "lead",
+        "plan",
+        {
+            "tasks": [
+                {"id": "T1", "title": "a", "depends_on": ["none"]},
+                {"id": "T2 ", "title": "b", "depends_on": ["T1 ", "T0", "T2"]},
+            ]
+        },
+    )
+    assert err is None
+    assert d["tasks"][0]["depends_on"] == []
+    assert d["tasks"][1]["id"] == "T2" and d["tasks"][1]["depends_on"] == ["T1"]
 
 
 def test_cost_tracker_prices():

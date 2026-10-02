@@ -93,6 +93,7 @@
   .picker div.d { padding: 5px 8px; cursor: pointer; border-radius: 6px; font-family: var(--mono); font-size: 12px } .picker div.d:hover { background: var(--panel2) }
   .result { background: var(--panel2); border-radius: 8px; padding: 10px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; max-height: 300px; overflow: auto }
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12px } .kv b { color: var(--muted); font-weight: 500 }
+  .busy button[data-act="run"], .busy #btnRunSel, .busy #root { pointer-events: none; opacity: .5 }
   .busy header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: slide 1.2s linear infinite }
   @keyframes slide { from { transform: translateX(-100%) } to { transform: translateX(100%) } }
   header { position: sticky }
@@ -515,6 +516,7 @@ function onEvent(ev) {
     case 'task_end':
       logLine(ev.accepted?'job_done':'job_error', `task ${ev.task_id} ${ev.accepted?'ACCEPTED':'not accepted'} · ${ev.rounds} round(s)${ev.escalated?' · escalated':''} · $${ev.cost_usd}${ev.branch?' · branch '+ev.branch+' — review & merge it':''}`); break;
     case 'run_end': logLine('job_done', `run finished · $${ev.total_usd}`); break;
+    case 'project_switched': break; // handled by the picker (it reloads state itself)
     case 'note': logLine('report info', `${ev.role||''}: ${ev.msg}`); break;
     case 'job_done':
       liveClear();

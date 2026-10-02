@@ -2,6 +2,7 @@ name: verifier
 title: Verifier
 slot: cheap
 tools: [run_tests, run_command, read_file, list_files]
+readonly: true
 max_tool_calls: 15
 description: >
   Runs the test suite and any checks in a sandbox and reports the observed result.

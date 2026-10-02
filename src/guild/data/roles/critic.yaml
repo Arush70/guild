@@ -2,6 +2,7 @@ name: critic
 title: Code Critic
 slot: reasoner
 tools: [read_file, list_files, search, git_diff]
+readonly: true
 max_tool_calls: 25
 description: >
   Adversarial reviewer. Looks for bugs, edge cases, unclear code, missing tests and

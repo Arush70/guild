@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,25 +43,47 @@ class LocalSandbox:
         self.root = root
 
     def run(self, command: str, timeout: int = 120) -> RunResult:
+        # Popen + process group so a timeout kills the whole tree. With subprocess.run() on
+        # Windows, kill() only ends cmd.exe; the python/pytest grandchild keeps the pipe open
+        # and communicate() blocks forever — guild would hang on an infinite-loop test.
+        kwargs: dict = (
+            {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+            if os.name == "nt"
+            else {"start_new_session": True}
+        )
+        proc = subprocess.Popen(
+            command,
+            shell=True,
+            cwd=self.root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=_clean_env(),
+            encoding="utf-8",
+            errors="replace",
+            **kwargs,
+        )
         try:
-            r = subprocess.run(
-                command,
-                shell=True,
-                cwd=self.root,
-                capture_output=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout,
-                env=_clean_env(),
+            out, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            try:
+                out, _ = proc.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                out = ""
+            return RunResult(124, f"{out or ''}\n[timed out after {timeout}s]", timed_out=True)
+        return RunResult(proc.returncode, out or "")
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, check=False
             )
-        except subprocess.TimeoutExpired as e:
-            out = (
-                (e.stdout or b"").decode(errors="replace")
-                if isinstance(e.stdout, bytes)
-                else (e.stdout or "")
-            )
-            return RunResult(124, f"{out}\n[timed out after {timeout}s]", timed_out=True)
-        return RunResult(r.returncode, r.stdout + r.stderr)
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except Exception:
+        proc.kill()
 
 
 class DockerSandbox:
