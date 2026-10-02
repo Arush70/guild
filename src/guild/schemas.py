@@ -10,13 +10,32 @@ list is expected becomes a one-item list; "true"/"yes" become booleans).
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 
 class _Lenient(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_strings(cls, data: Any) -> Any:
+        """Small models send null / numbers / objects where a string is expected; accept them."""
+        if not isinstance(data, dict):
+            return data
+        out = dict(data)
+        for name, field in cls.model_fields.items():
+            if field.annotation is str and name in out:
+                v = out[name]
+                if v is None:
+                    out[name] = ""
+                elif isinstance(v, (dict, list)):
+                    out[name] = json.dumps(v, ensure_ascii=False)
+                elif not isinstance(v, str):
+                    out[name] = str(v)
+        return out
 
 
 def _as_list(v: Any) -> Any:
