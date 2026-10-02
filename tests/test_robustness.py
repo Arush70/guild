@@ -23,6 +23,21 @@ def test_validate_normalises_near_misses():
     assert err is None and d["decision"] == "ACCEPT"
 
 
+def test_validate_coerces_null_and_non_string_fields():
+    # qwen-7b style replies: null summary, numeric tests_run, object notes
+    d, err = validate(
+        "engineer",
+        "default",
+        {"status": "done", "summary": None, "tests_run": 2, "notes_for_reviewer": {"ok": True}},
+    )
+    assert err is None
+    assert d["summary"] == "" and d["tests_run"] == "2" and '"ok": true' in d["notes_for_reviewer"]
+    d, err = validate(
+        "critic", "default", {"verdict": "approve", "findings": None, "summary": None}
+    )
+    assert err is None and d["findings"] == [] and d["summary"] == ""
+
+
 def test_validate_reports_errors():
     d, err = validate("lead", "plan", {"roadmap": ["m"], "tasks": []})
     assert d is None and "tasks" in err
