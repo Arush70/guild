@@ -50,5 +50,18 @@ testpaths = ["tests"]
 line-length = 100
 target-version = "py310"
 
+[tool.ruff.lint]
+# Pinned explicitly so results do not depend on the ruff version's default rule set.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RUF"]
+ignore = [
+  "B008",   # typer.Option()/Argument() in defaults is the typer idiom
+  "RUF012", # mutable class attributes in pydantic models are fine
+  "RUF001", "RUF002", "RUF003",  # en dashes / arrows in user-facing text are intentional
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["guild", "tests"]
+
 [tool.ruff.lint.per-file-ignores]
 "src/guild/cli.py" = ["E702"]
+"tests/*" = ["E501"]  # long literal fixtures (scripted model replies) are clearer on one line

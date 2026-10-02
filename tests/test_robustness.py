@@ -1,4 +1,5 @@
 """Output-contract validation, repair retries, and streaming assembly."""
+
 from __future__ import annotations
 
 from guild.providers.base import Completion, Message, Usage
@@ -8,8 +9,12 @@ from guild.workflow import Guild
 
 
 def test_validate_normalises_near_misses():
-    d, err = validate("critic", "default", {"verdict": "Changes Requested", "findings": "no test", "summary": "x"})
-    assert err is None and d["verdict"] == "request_changes" and d["findings"][0]["issue"] == "no test"
+    d, err = validate(
+        "critic", "default", {"verdict": "Changes Requested", "findings": "no test", "summary": "x"}
+    )
+    assert (
+        err is None and d["verdict"] == "request_changes" and d["findings"][0]["issue"] == "no test"
+    )
     d, err = validate("engineer", "default", {"status": "COMPLETED", "files_changed": "app.py"})
     assert err is None and d["status"] == "done" and d["files_changed"] == ["app.py"]
     d, err = validate("lead", "plan", {"tasks": [{"title": "t"}]})
@@ -29,6 +34,7 @@ def test_validate_reports_errors():
 
 class ScriptedText:
     """Replies with fixed texts in order."""
+
     def __init__(self, texts):
         self.texts = list(texts)
         self.n = 0
@@ -40,11 +46,13 @@ class ScriptedText:
 
 
 def test_invalid_reply_is_repaired(project, cfg, profile):
-    fake = ScriptedText([
-        'Here is my review, hope it helps!',                               # no JSON
-        '{"verdict": "meh", "findings": []}',                              # invalid verdict
-        '{"verdict": "approve", "findings": [], "summary": "fine now"}',   # valid
-    ])
+    fake = ScriptedText(
+        [
+            "Here is my review, hope it helps!",  # no JSON
+            '{"verdict": "meh", "findings": []}',  # invalid verdict
+            '{"verdict": "approve", "findings": [], "summary": "fine now"}',  # valid
+        ]
+    )
     g = Guild(project, cfg, profile)
     g.router.register_provider("fake", fake)
     res = g.agent("critic").run("review")
@@ -70,7 +78,7 @@ def test_on_token_streams_to_callback(project, cfg, profile):
             text = '{"verdict": "approve", "findings": [], "summary": "ok"}'
             if on_token:
                 for i in range(0, len(text), 7):
-                    on_token(text[i:i + 7])
+                    on_token(text[i : i + 7])
             return Completion(Message("assistant", text), Usage(1, 1), f"fake/{model_name}", "stop")
 
     got = []
@@ -78,7 +86,10 @@ def test_on_token_streams_to_callback(project, cfg, profile):
     g.router.register_provider("fake", Streamer())
     role = g.role("critic")
     from guild.agent import Agent
-    res = Agent(role, g.router, g._ctx(role), g.trace, on_token=lambda r, c: got.append((r, c))).run("review")
+
+    res = Agent(
+        role, g.router, g._ctx(role), g.trace, on_token=lambda r, c: got.append((r, c))
+    ).run("review")
     g.close()
     assert res.data["verdict"] == "approve"
     assert "".join(c for _, c in got) == '{"verdict": "approve", "findings": [], "summary": "ok"}'
@@ -88,6 +99,7 @@ def test_on_token_streams_to_callback(project, cfg, profile):
 def test_openai_stream_assembly():
     """Assemble text + split tool-call deltas from a fake streamed response."""
     from types import SimpleNamespace as NS
+
     from guild.providers.openai_compat import OpenAICompatProvider
 
     def fn(name=None, arguments=None):
@@ -96,12 +108,40 @@ def test_openai_stream_assembly():
     chunks = [
         NS(usage=None, choices=[NS(finish_reason=None, delta=NS(content="Hel", tool_calls=None))]),
         NS(usage=None, choices=[NS(finish_reason=None, delta=NS(content="lo", tool_calls=None))]),
-        NS(usage=None, choices=[NS(finish_reason=None, delta=NS(content=None, tool_calls=[
-            NS(index=0, id="c1", function=fn("read_", None))]))]),
-        NS(usage=None, choices=[NS(finish_reason=None, delta=NS(content=None, tool_calls=[
-            NS(index=0, id=None, function=fn("file", '{"pa'))]))]),
-        NS(usage=None, choices=[NS(finish_reason="tool_calls", delta=NS(content=None, tool_calls=[
-            NS(index=0, id=None, function=fn(None, 'th": "a.py"}'))]))]),
+        NS(
+            usage=None,
+            choices=[
+                NS(
+                    finish_reason=None,
+                    delta=NS(
+                        content=None, tool_calls=[NS(index=0, id="c1", function=fn("read_", None))]
+                    ),
+                )
+            ],
+        ),
+        NS(
+            usage=None,
+            choices=[
+                NS(
+                    finish_reason=None,
+                    delta=NS(
+                        content=None, tool_calls=[NS(index=0, id=None, function=fn("file", '{"pa'))]
+                    ),
+                )
+            ],
+        ),
+        NS(
+            usage=None,
+            choices=[
+                NS(
+                    finish_reason="tool_calls",
+                    delta=NS(
+                        content=None,
+                        tool_calls=[NS(index=0, id=None, function=fn(None, 'th": "a.py"}'))],
+                    ),
+                )
+            ],
+        ),
         NS(usage=NS(prompt_tokens=10, completion_tokens=4), choices=[]),
     ]
 

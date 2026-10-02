@@ -6,8 +6,10 @@ loaded with pandas and analysed offline (the same discipline as ASTRA/MACS trace
 Event kinds:
   run_start, run_end, phase, model_call, tool_call, decision, verification, fallback, error, note
 """
+
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 import uuid
@@ -26,7 +28,7 @@ class Trace:
         self.run_id = run_id
         self.echo = echo  # optional callable(event: dict) for live display
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._f = open(self.path, "a", encoding="utf-8")
+        self._f = open(self.path, "a", encoding="utf-8")  # noqa: SIM115 — closed in close()
         self._seq = 0
 
     def emit(self, kind: str, **fields: Any) -> dict[str, Any]:
@@ -40,23 +42,47 @@ class Trace:
         return ev
 
     def close(self) -> None:
-        try:
+        with contextlib.suppress(OSError):
             self._f.close()
-        except OSError:
-            pass
 
     # convenience -----------------------------------------------------------
-    def model_call(self, *, role: str, slot: str, model: str, input_tokens: int, output_tokens: int,
-                   usd: float, latency_s: float, n_tool_calls: int, stop_reason: str,
-                   content_preview: str) -> None:
-        self.emit("model_call", role=role, slot=slot, model=model, input_tokens=input_tokens,
-                  output_tokens=output_tokens, usd=round(usd, 6), latency_s=round(latency_s, 3),
-                  n_tool_calls=n_tool_calls, stop_reason=stop_reason,
-                  content_preview=content_preview[:300])
+    def model_call(
+        self,
+        *,
+        role: str,
+        slot: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        usd: float,
+        latency_s: float,
+        n_tool_calls: int,
+        stop_reason: str,
+        content_preview: str,
+    ) -> None:
+        self.emit(
+            "model_call",
+            role=role,
+            slot=slot,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            usd=round(usd, 6),
+            latency_s=round(latency_s, 3),
+            n_tool_calls=n_tool_calls,
+            stop_reason=stop_reason,
+            content_preview=content_preview[:300],
+        )
 
     def tool_call(self, *, role: str, tool: str, args: dict, result_preview: str, ok: bool) -> None:
-        self.emit("tool_call", role=role, tool=tool, args=_short_args(args),
-                  result_preview=result_preview[:300], ok=ok)
+        self.emit(
+            "tool_call",
+            role=role,
+            tool=tool,
+            args=_short_args(args),
+            result_preview=result_preview[:300],
+            ok=ok,
+        )
 
 
 def _short_args(args: dict) -> dict:

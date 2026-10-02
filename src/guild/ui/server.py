@@ -4,6 +4,7 @@ Single-process FastAPI app. Long jobs (plan / run / ask) execute on one backgrou
 their trace events and progress messages are pushed to the browser over Server-Sent Events.
 Binds to 127.0.0.1 only — this is a local tool, not a hosted service.
 """
+
 from __future__ import annotations
 
 import json
@@ -21,14 +22,21 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
-from ..config import (GUILD_DIR, ProjectConfig, list_available, load_profile, load_project_config,
-                      load_role, save_project_config)
+from ..config import (
+    GUILD_DIR,
+    ProjectConfig,
+    list_available,
+    load_profile,
+    load_project_config,
+    load_role,
+    save_project_config,
+)
 from ..providers import AllProvidersFailed, BudgetExceeded
 from ..providers.openai_compat import ENDPOINTS
 from ..trace import read_trace
 
-
 # --------------------------------------------------------------------------- job runner
+
 
 @dataclass
 class Job:
@@ -118,14 +126,16 @@ class Hub:
                 job.status = "error"
                 job.error = str(e)
                 self.publish({"kind": "job_error", "job": kind, "error": str(e)})
-            except Exception as e:  # noqa: BLE001 — surface anything to the UI, with a traceback
+            except Exception as e:
                 import traceback
+
                 tb = traceback.format_exc()
                 job.status = "error"
                 job.error = f"{type(e).__name__}: {e}"
                 print(tb, file=sys.stderr)
-                self.publish({"kind": "job_error", "job": kind, "error": job.error,
-                              "traceback": tb[-3000:]})
+                self.publish(
+                    {"kind": "job_error", "job": kind, "error": job.error, "traceback": tb[-3000:]}
+                )
 
         threading.Thread(target=_run, daemon=True).start()
         return job
@@ -146,6 +156,7 @@ def _jsonable(v: Any) -> Any:
 
 
 # --------------------------------------------------------------------------- app
+
 
 class PlanReq(BaseModel):
     goal: str
@@ -208,10 +219,16 @@ def create_app(root: Path) -> FastAPI:
 
     def _make_guild(profile_override: str | None):
         from ..workflow import Guild
+
         cfg = load_project_config(S.root)
         prof = load_profile(profile_override or cfg.profile, S.root)
-        g = Guild(S.root, cfg, prof, report=lambda lvl, msg: S.hub.publish({"kind": "report", "level": lvl, "msg": msg}),
-                  on_token=S.hub.token)
+        g = Guild(
+            S.root,
+            cfg,
+            prof,
+            report=lambda lvl, msg: S.hub.publish({"kind": "report", "level": lvl, "msg": msg}),
+            on_token=S.hub.token,
+        )
         g.trace.echo = lambda ev: S.hub.publish(dict(ev))
         return g
 
@@ -229,21 +246,31 @@ def create_app(root: Path) -> FastAPI:
         warnings: list[str] = []
         if plan:
             from ..workflow import Plan
+
             try:
                 warnings = Plan.from_dict(plan).warnings()
             except (KeyError, TypeError):
                 warnings = []
         return {
-            "root": str(S.root), "config": cfg.model_dump(), "plan_warnings": warnings,
-            "profiles": list_available("profiles", S.root), "roles": list_available("roles", S.root),
-            "plan": plan, "busy": busy, "job": job,
+            "root": str(S.root),
+            "config": cfg.model_dump(),
+            "plan_warnings": warnings,
+            "profiles": list_available("profiles", S.root),
+            "roles": list_available("roles", S.root),
+            "plan": plan,
+            "busy": busy,
+            "job": job,
         }
 
     # ---- project selection -------------------------------------------------------------
     @app.get("/api/project")
     def project_info():
-        return {"root": str(S.root), "initialised": (S.root / GUILD_DIR / "config.yaml").exists(),
-                "git": (S.root / ".git").is_dir(), "recent": _recent_projects()}
+        return {
+            "root": str(S.root),
+            "initialised": (S.root / GUILD_DIR / "config.yaml").exists(),
+            "git": (S.root / ".git").is_dir(),
+            "recent": _recent_projects(),
+        }
 
     @app.post("/api/project")
     def project_switch(req: ProjectReq):
@@ -256,6 +283,7 @@ def create_app(root: Path) -> FastAPI:
         if not (S.root / GUILD_DIR / "config.yaml").exists():
             # first time here: write a default config (user can run `guild init` for the wizard)
             from ..hardware import detect_test_command
+
             save_project_config(S.root, ProjectConfig(test_command=detect_test_command(S.root)))
         _remember_project(S.root)
         return project_info()
@@ -267,6 +295,7 @@ def create_app(root: Path) -> FastAPI:
             entries = []
             if os.name == "nt":
                 import string
+
                 for d in string.ascii_uppercase:
                     if Path(f"{d}:\\").exists():
                         entries.append({"name": f"{d}:\\", "path": f"{d}:\\"})
@@ -278,23 +307,48 @@ def create_app(root: Path) -> FastAPI:
         dirs = []
         try:
             for child in sorted(p.iterdir(), key=lambda c: c.name.lower()):
-                if child.is_dir() and not child.name.startswith(".") and child.name not in {"node_modules", "__pycache__", "$RECYCLE.BIN", "System Volume Information"}:
-                    dirs.append({"name": child.name, "path": str(child), "git": (child / ".git").is_dir(),
-                                 "guild": (child / GUILD_DIR).is_dir()})
+                if (
+                    child.is_dir()
+                    and not child.name.startswith(".")
+                    and child.name
+                    not in {
+                        "node_modules",
+                        "__pycache__",
+                        "$RECYCLE.BIN",
+                        "System Volume Information",
+                    }
+                ):
+                    dirs.append(
+                        {
+                            "name": child.name,
+                            "path": str(child),
+                            "git": (child / ".git").is_dir(),
+                            "guild": (child / GUILD_DIR).is_dir(),
+                        }
+                    )
         except PermissionError:
             pass
-        return {"path": str(p), "parent": str(p.parent) if p.parent != p else None, "dirs": dirs[:500]}
+        return {
+            "path": str(p),
+            "parent": str(p.parent) if p.parent != p else None,
+            "dirs": dirs[:500],
+        }
 
     # ---- files -----------------------------------------------------------------------------
     @app.get("/api/files")
     def files():
         cfg = load_project_config(S.root)
         from ..tools.registry import ToolContext
-        ctx = ToolContext(root=S.root, ignore=cfg.ignore, test_command="", lint_command=None, sandbox=None)
+
+        ctx = ToolContext(
+            root=S.root, ignore=cfg.ignore, test_command="", lint_command=None, sandbox=None
+        )
         out = []
         for dirpath, dirnames, filenames in os.walk(S.root):
             rel_dir = os.path.relpath(dirpath, S.root)
-            dirnames[:] = sorted(d for d in dirnames if not ctx.is_ignored(os.path.join(rel_dir, d)))
+            dirnames[:] = sorted(
+                d for d in dirnames if not ctx.is_ignored(os.path.join(rel_dir, d))
+            )
             for f in sorted(filenames):
                 rel = os.path.normpath(os.path.join(rel_dir, f)).replace("\\", "/")
                 if rel.startswith("./"):
@@ -313,8 +367,11 @@ def create_app(root: Path) -> FastAPI:
     @app.get("/api/file")
     def file_read(path: str):
         from ..tools.registry import ToolContext
+
         cfg = load_project_config(S.root)
-        ctx = ToolContext(root=S.root, ignore=cfg.ignore, test_command="", lint_command=None, sandbox=None)
+        ctx = ToolContext(
+            root=S.root, ignore=cfg.ignore, test_command="", lint_command=None, sandbox=None
+        )
         try:
             p = ctx.resolve(path)
         except PermissionError as e:
@@ -349,8 +406,11 @@ def create_app(root: Path) -> FastAPI:
                 res = g.chat(req.message, history)
             finally:
                 g.close()
-            S.chat_history.append({"role": "assistant", "content": res.raw, "model": res.model, "ts": time.time()})
+            S.chat_history.append(
+                {"role": "assistant", "content": res.raw, "model": res.model, "ts": time.time()}
+            )
             return {"text": res.raw, "model": res.model}
+
         S.hub.start("chat", fn)
         return {"ok": True}
 
@@ -363,6 +423,7 @@ def create_app(root: Path) -> FastAPI:
                 return g.revise_plan(req.instruction)
             finally:
                 g.close()
+
         S.hub.start("revise", fn)
         return {"ok": True}
 
@@ -387,13 +448,21 @@ def create_app(root: Path) -> FastAPI:
                     st = "key set" if ok else "ANTHROPIC_API_KEY missing"
                 elif prefix in ENDPOINTS:
                     ep = ENDPOINTS[prefix]
-                    ok = ep.key_env is None or bool(os.environ.get(ep.key_env)) or prefix in {"omniroute", "litellm", "custom"}
+                    ok = (
+                        ep.key_env is None
+                        or bool(os.environ.get(ep.key_env))
+                        or prefix in {"omniroute", "litellm", "custom"}
+                    )
                     st = "configured" if ok else f"{ep.key_env} missing"
                 else:
                     st, ok = "unknown provider", False
                 rows.append({"slot": slot, "model": m, "status": st, "ok": ok})
-        return {"profile": prof.model_dump(), "rows": rows, "git": (S.root / ".git").is_dir(),
-                "ollama_models": ollama or []}
+        return {
+            "profile": prof.model_dump(),
+            "rows": rows,
+            "git": (S.root / ".git").is_dir(),
+            "ollama_models": ollama or [],
+        }
 
     @app.get("/api/roles")
     def roles():
@@ -413,9 +482,13 @@ def create_app(root: Path) -> FastAPI:
         def fn():
             g = _make_guild(req.profile)
             try:
-                return g.plan(req.goal, extra_context=(f"ADDITIONAL BRIEF:\n{req.context}" if req.context else ""))
+                return g.plan(
+                    req.goal,
+                    extra_context=(f"ADDITIONAL BRIEF:\n{req.context}" if req.context else ""),
+                )
             finally:
                 g.close()
+
         S.hub.start("plan", fn)
         return {"ok": True}
 
@@ -433,6 +506,7 @@ def create_app(root: Path) -> FastAPI:
                 return g.run_tasks(p, ids, all_tasks=req.all, roles=roles_)
             finally:
                 g.close()
+
         S.hub.start("run", fn)
         return {"ok": True}
 
@@ -444,6 +518,7 @@ def create_app(root: Path) -> FastAPI:
                 return g.ask(req.role, req.question)
             finally:
                 g.close()
+
         S.hub.start("ask", fn)
         return {"ok": True}
 
@@ -471,6 +546,7 @@ def create_app(root: Path) -> FastAPI:
     # ---- branches: review & merge from the dashboard (human decision, guild never auto-merges)
     def _wf():
         from ..workflow import Guild
+
         cfg = load_project_config(S.root)
         prof = load_profile(cfg.profile, S.root)
         g = Guild.__new__(Guild)  # git helpers only; no trace/run dir created
@@ -500,7 +576,13 @@ def create_app(root: Path) -> FastAPI:
             tmp = plan_p.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(plan, indent=2), encoding="utf-8")
             os.replace(tmp, plan_p)
-            S.hub.publish({"kind": "report", "level": "info", "msg": f"merged {task['branch']} into {res['base']}"})
+            S.hub.publish(
+                {
+                    "kind": "report",
+                    "level": "info",
+                    "msg": f"merged {task['branch']} into {res['base']}",
+                }
+            )
         return res
 
     @app.post("/api/branches/{task_id}/discard")
@@ -524,17 +606,27 @@ def create_app(root: Path) -> FastAPI:
     @app.get("/api/runs")
     def runs():
         out = []
-        paths = sorted((S.root / GUILD_DIR / "runs").glob("*/trace.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        paths = sorted(
+            (S.root / GUILD_DIR / "runs").glob("*/trace.jsonl"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
         for p in paths[:50]:
             ev = read_trace(p)
             calls = [e for e in ev if e["kind"] == "model_call"]
             start = next((e for e in ev if e["kind"] == "run_start"), {})
-            out.append({"id": p.parent.name, "profile": start.get("profile"), "calls": len(calls),
-                        "input_tokens": sum(e["input_tokens"] for e in calls),
-                        "output_tokens": sum(e["output_tokens"] for e in calls),
-                        "usd": round(sum(e.get("usd", 0) for e in calls), 4),
-                        "phases": [e.get("phase") for e in ev if e["kind"] == "phase"][:12],
-                        "ts": ev[0]["ts"] if ev else 0})
+            out.append(
+                {
+                    "id": p.parent.name,
+                    "profile": start.get("profile"),
+                    "calls": len(calls),
+                    "input_tokens": sum(e["input_tokens"] for e in calls),
+                    "output_tokens": sum(e["output_tokens"] for e in calls),
+                    "usd": round(sum(e.get("usd", 0) for e in calls), 4),
+                    "phases": [e.get("phase") for e in ev if e["kind"] == "phase"][:12],
+                    "ts": ev[0]["ts"] if ev else 0,
+                }
+            )
         return out
 
     @app.get("/api/runs/{run_id}")
@@ -548,7 +640,17 @@ def create_app(root: Path) -> FastAPI:
         by_role: dict[str, dict] = {}
         for e in events:
             if e["kind"] == "model_call":
-                r = by_role.setdefault(e["role"], {"calls": 0, "input_tokens": 0, "output_tokens": 0, "usd": 0.0, "latency_s": 0.0, "models": set()})
+                r = by_role.setdefault(
+                    e["role"],
+                    {
+                        "calls": 0,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "usd": 0.0,
+                        "latency_s": 0.0,
+                        "models": set(),
+                    },
+                )
                 r["calls"] += 1
                 r["input_tokens"] += e["input_tokens"]
                 r["output_tokens"] += e["output_tokens"]
@@ -559,8 +661,12 @@ def create_app(root: Path) -> FastAPI:
             r["models"] = sorted(r["models"])
             r["usd"] = round(r["usd"], 5)
             r["latency_s"] = round(r["latency_s"], 1)
-        return {"events": events, "by_role": by_role,
-                "started": events[0]["ts"] if events else 0, "ended": events[-1]["ts"] if events else 0}
+        return {
+            "events": events,
+            "by_role": by_role,
+            "started": events[0]["ts"] if events else 0,
+            "ended": events[-1]["ts"] if events else 0,
+        }
 
     @app.get("/api/events")
     def events():
@@ -578,8 +684,11 @@ def create_app(root: Path) -> FastAPI:
             finally:
                 S.hub.unsubscribe(q)
 
-        return StreamingResponse(gen(), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     return app
 
@@ -618,16 +727,18 @@ def _read_plan(root: Path) -> dict | None:
 
 def _ollama_models() -> list[str] | None:
     import httpx
+
     host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
     try:
         r = httpx.get(f"{host}/api/tags", timeout=3)
         return [m["name"] for m in r.json().get("models", [])]
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
 def serve(root: Path, port: int = 7331, open_browser: bool = True) -> None:
     import uvicorn
+
     if not (root / GUILD_DIR / "config.yaml").exists():
         save_project_config(root, ProjectConfig())
     _remember_project(root.resolve())
@@ -635,6 +746,7 @@ def serve(root: Path, port: int = 7331, open_browser: bool = True) -> None:
     url = f"http://127.0.0.1:{port}"
     if open_browser:
         import webbrowser
+
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     print(f"guild ui → {url}   (project: {root})   Ctrl+C to stop")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

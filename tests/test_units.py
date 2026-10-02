@@ -5,7 +5,7 @@ import pytest
 from guild.agent import extract_json
 from guild.config import list_available, load_profile, load_role
 from guild.providers.base import Usage
-from guild.providers.router import CostTracker, DEFAULT_PRICES
+from guild.providers.router import DEFAULT_PRICES, CostTracker
 from guild.tools.registry import REGISTRY
 
 
@@ -36,13 +36,16 @@ def test_free_profile_has_no_paid_models():
     assert p.limits.max_usd_per_run == 0
 
 
-@pytest.mark.parametrize("text,expected", [
-    ('{"a": 1}', {"a": 1}),
-    ('Sure!\n```json\n{"a": 1}\n```', {"a": 1}),
-    ('prefix {"a": {"b": 2}} suffix', {"a": {"b": 2}}),
-    ('no json here', None),
-    ('', None),
-])
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ('{"a": 1}', {"a": 1}),
+        ('Sure!\n```json\n{"a": 1}\n```', {"a": 1}),
+        ('prefix {"a": {"b": 2}} suffix', {"a": {"b": 2}}),
+        ("no json here", None),
+        ("", None),
+    ],
+)
 def test_extract_json(text, expected):
     assert extract_json(text) == expected
 
@@ -55,24 +58,32 @@ def test_cost_tracker_prices():
     assert t.price("ollama/anything", Usage(10**6, 10**6)) == 0.0
 
 
-@pytest.mark.parametrize("text,vague", [
-    ("test_multiply passes", False),
-    ("pytest exits 0", False),
-    ("The interface is designed and documented.", True),
-    ("works well", True),
-    ("", True),
-])
+@pytest.mark.parametrize(
+    "text,vague",
+    [
+        ("test_multiply passes", False),
+        ("pytest exits 0", False),
+        ("The interface is designed and documented.", True),
+        ("works well", True),
+        ("", True),
+    ],
+)
 def test_vague_done_when(text, vague):
     from guild.workflow import vague_done_when
+
     assert vague_done_when(text) is vague
 
 
 def test_extract_text_tool_calls_variants():
     from guild.agent import extract_text_tool_calls
+
     allowed = {"read_file", "edit_file"}
     txt = 'I will read it.\n```json\n{"name": "read_file", "arguments": {"path": "a.py"}}\n```\nthen {"tool": "edit_file", "args": {"path": "a.py", "old_text": "x", "new_text": "y"}}'
     calls = extract_text_tool_calls(txt, allowed)
-    assert [(c.name, c.arguments["path"]) for c in calls] == [("read_file", "a.py"), ("edit_file", "a.py")]
+    assert [(c.name, c.arguments["path"]) for c in calls] == [
+        ("read_file", "a.py"),
+        ("edit_file", "a.py"),
+    ]
     # a final-answer JSON must not be mistaken for a tool call
     assert extract_text_tool_calls('{"status": "done", "summary": "ok"}', allowed) == []
     # unknown tools are ignored

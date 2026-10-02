@@ -4,6 +4,7 @@ Nothing here is precise — VRAM/RAM numbers are read from nvidia-smi and the OS
 are approximate Q4 weights plus KV-cache headroom. The goal is a sensible default, not a
 benchmark. Everything degrades gracefully to "unknown" when a probe fails.
 """
+
 from __future__ import annotations
 
 import os
@@ -29,7 +30,7 @@ class Hardware:
 
     @property
     def usable_gb(self) -> float | None:
-        """Rough budget for a fully GPU-resident model (VRAM minus ~1 GB) or, on CPU/Apple, RAM/2."""
+        """Budget for a fully GPU-resident model (VRAM minus ~1 GB) or, on CPU/Apple, RAM/2."""
         if self.vram_gb:
             return max(self.vram_gb - 1.0, 0.5)
         if self.ram_gb:
@@ -40,16 +41,16 @@ class Hardware:
 # name -> (approx GB at Q4 incl. headroom, quality tier 1-5, tags)
 CATALOG: list[tuple[str, float, int, set[str]]] = [
     ("qwen2.5-coder:1.5b", 1.5, 1, {"coder"}),
-    ("qwen2.5-coder:3b",   2.5, 2, {"coder"}),
-    ("qwen2.5-coder:7b",   5.5, 3, {"coder", "general"}),
-    ("qwen3:8b",           6.0, 3, {"general", "reasoner"}),
-    ("deepseek-r1:8b",     6.0, 3, {"reasoner"}),
-    ("qwen2.5-coder:14b",  10.0, 4, {"coder", "general"}),
-    ("deepseek-r1:14b",    10.0, 4, {"reasoner"}),
-    ("qwen3:14b",          10.0, 4, {"general", "reasoner"}),
-    ("qwen3-coder:30b",    20.0, 5, {"coder", "general"}),
-    ("deepseek-r1:32b",    21.0, 5, {"reasoner"}),
-    ("qwen3:32b",          21.0, 5, {"general", "reasoner"}),
+    ("qwen2.5-coder:3b", 2.5, 2, {"coder"}),
+    ("qwen2.5-coder:7b", 5.5, 3, {"coder", "general"}),
+    ("qwen3:8b", 6.0, 3, {"general", "reasoner"}),
+    ("deepseek-r1:8b", 6.0, 3, {"reasoner"}),
+    ("qwen2.5-coder:14b", 10.0, 4, {"coder", "general"}),
+    ("deepseek-r1:14b", 10.0, 4, {"reasoner"}),
+    ("qwen3:14b", 10.0, 4, {"general", "reasoner"}),
+    ("qwen3-coder:30b", 20.0, 5, {"coder", "general"}),
+    ("deepseek-r1:32b", 21.0, 5, {"reasoner"}),
+    ("qwen3:32b", 21.0, 5, {"general", "reasoner"}),
 ]
 
 
@@ -83,23 +84,33 @@ def _ram_gb() -> float | None:
     if platform.system() == "Windows":
         try:
             import ctypes
+
             class MEMORYSTATUSEX(ctypes.Structure):
-                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
-                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
-                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
-                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
-                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
             st = MEMORYSTATUSEX()
             st.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))  # type: ignore[attr-defined]
             return round(st.ullTotalPhys / 2**30, 1)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
     if platform.system() == "Darwin":
         try:
-            out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=3).stdout
+            out = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=3
+            ).stdout
             return round(int(out.strip()) / 2**30, 1)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
     return None
 
@@ -108,9 +119,17 @@ def _nvidia() -> tuple[str | None, float | None]:
     if shutil.which("nvidia-smi") is None:
         return None, None
     try:
-        out = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
-                             capture_output=True, text=True, timeout=5).stdout.strip().splitlines()
-    except Exception:  # noqa: BLE001
+        out = (
+            subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            .stdout.strip()
+            .splitlines()
+        )
+    except Exception:
         return None, None
     if not out:
         return None, None
@@ -123,11 +142,12 @@ def _nvidia() -> tuple[str | None, float | None]:
 
 def _ollama() -> tuple[bool, list[str]]:
     import httpx
+
     host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
     try:
         r = httpx.get(f"{host}/api/tags", timeout=3)
         return True, [m["name"] for m in r.json().get("models", [])]
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False, []
 
 
@@ -154,7 +174,12 @@ def recommend_local(hw: Hardware) -> dict[str, list[str]]:
     coder = best("coder")
     general = best("general", "coder")
     reasoner = best("reasoner", "general")
-    return {"frontier": general, "coder": coder, "reasoner": reasoner, "cheap": list(reversed(coder)) or coder}
+    return {
+        "frontier": general,
+        "coder": coder,
+        "reasoner": reasoner,
+        "cheap": list(reversed(coder)) or coder,
+    }
 
 
 def build_profile(hw: Hardware, tier: str) -> dict:
@@ -170,21 +195,32 @@ def build_profile(hw: Hardware, tier: str) -> dict:
         slots = {
             "frontier": free_cloud + local["frontier"],
             "coder": local["coder"] + free_cloud[:1],
-            "reasoner": (["groq/deepseek-r1-distill-llama-70b"] if hw.keys.get("groq") else []) + local["reasoner"],
-            "cheap": (["gemini/gemini-2.5-flash"] if hw.keys.get("gemini") else []) + local["cheap"],
+            "reasoner": (["groq/deepseek-r1-distill-llama-70b"] if hw.keys.get("groq") else [])
+            + local["reasoner"],
+            "cheap": (["gemini/gemini-2.5-flash"] if hw.keys.get("gemini") else [])
+            + local["cheap"],
         }
         limits = {"max_revision_rounds": 3, "max_tool_calls_per_task": 60, "max_usd_per_run": 0}
         desc = "Local-first on this machine" + (" with free cloud fallbacks" if free_cloud else "")
         budget = 0
     elif tier == "lite":
         slots = {
-            "frontier": ["anthropic/claude-fable-5-1", "anthropic/claude-sonnet-5"] + free_cloud + local["frontier"],
+            "frontier": ["anthropic/claude-fable-5-1", "anthropic/claude-sonnet-5"]
+            + free_cloud
+            + local["frontier"],
             "coder": local["coder"] + ["deepseek/deepseek-chat"],
             "coder_escalation": ["anthropic/claude-sonnet-5", "deepseek/deepseek-chat"],
             "reasoner": ["deepseek/deepseek-reasoner"] + free_cloud + local["reasoner"],
-            "cheap": (["gemini/gemini-2.5-flash"] if hw.keys.get("gemini") else []) + ["deepseek/deepseek-chat"] + local["cheap"],
+            "cheap": (["gemini/gemini-2.5-flash"] if hw.keys.get("gemini") else [])
+            + ["deepseek/deepseek-chat"]
+            + local["cheap"],
         }
-        limits = {"max_revision_rounds": 3, "escalate_after": 2, "max_tool_calls_per_task": 80, "max_usd_per_run": 2.0}
+        limits = {
+            "max_revision_rounds": 3,
+            "escalate_after": 2,
+            "max_tool_calls_per_task": 80,
+            "max_usd_per_run": 2.0,
+        }
         desc = "Claude plans and reviews; local models code; cheap APIs critique"
         budget = 15
     else:
@@ -195,7 +231,12 @@ def build_profile(hw: Hardware, tier: str) -> dict:
             "reasoner": ["openai/gpt-5", "gemini/gemini-2.5-pro", "anthropic/claude-sonnet-5"],
             "cheap": ["gemini/gemini-2.5-flash", "openai/gpt-5-mini", "anthropic/claude-haiku-4-5"],
         }
-        limits = {"max_revision_rounds": 4, "escalate_after": 1, "max_tool_calls_per_task": 150, "max_usd_per_run": 15.0}
+        limits = {
+            "max_revision_rounds": 4,
+            "escalate_after": 1,
+            "max_tool_calls_per_task": 150,
+            "max_usd_per_run": 15.0,
+        }
         desc = "Best model in every seat"
         budget = None
     # de-duplicate while keeping order
@@ -205,18 +246,32 @@ def build_profile(hw: Hardware, tier: str) -> dict:
             if m not in seen:
                 seen.append(m)
         slots[k] = seen
-    return {"name": tier, "description": desc, "monthly_budget_gbp": budget, "slots": slots, "limits": limits}
+    return {
+        "name": tier,
+        "description": desc,
+        "monthly_budget_gbp": budget,
+        "slots": slots,
+        "limits": limits,
+    }
 
 
 def detect_test_command(root: Path) -> str:
     """Guess how to run this project's tests from the files present."""
-    if (root / "pyproject.toml").exists() or (root / "setup.py").exists() or list(root.glob("test_*.py")) \
-            or (root / "tests").is_dir() or list(root.glob("*.py")):
+    if (
+        (root / "pyproject.toml").exists()
+        or (root / "setup.py").exists()
+        or list(root.glob("test_*.py"))
+        or (root / "tests").is_dir()
+        or list(root.glob("*.py"))
+    ):
         return "python -m pytest -q"
     if (root / "package.json").exists():
         try:
             import json
-            scripts = json.loads((root / "package.json").read_text(encoding="utf-8")).get("scripts", {})
+
+            scripts = json.loads((root / "package.json").read_text(encoding="utf-8")).get(
+                "scripts", {}
+            )
             if "test" in scripts:
                 return "npm test --silent"
         except (OSError, ValueError):
@@ -255,12 +310,16 @@ def summary_lines(hw: Hardware) -> list[str]:
     else:
         lines.append("GPU: none detected (nvidia-smi not found) — local models will run on CPU")
     if hw.ollama_reachable:
-        lines.append(f"Ollama: running, {len(hw.ollama_models)} model(s) pulled" + (": " + ", ".join(hw.ollama_models[:6]) if hw.ollama_models else ""))
+        lines.append(
+            f"Ollama: running, {len(hw.ollama_models)} model(s) pulled"
+            + (": " + ", ".join(hw.ollama_models[:6]) if hw.ollama_models else "")
+        )
     else:
-        lines.append("Ollama: not reachable — install from https://ollama.com for free local models")
+        lines.append(
+            "Ollama: not reachable — install from https://ollama.com for free local models"
+        )
     keys = [k for k, v in hw.keys.items() if v]
     lines.append("API keys: " + (", ".join(keys) if keys else "none set"))
-    lines.append(f"git: {'yes' if hw.git else 'NO — install git; guild needs it for branches'}  docker: {'yes' if hw.docker else 'no'}")
+    git = "yes" if hw.git else "NO — install git; guild needs it for branches"
+    lines.append(f"git: {git}  docker: {'yes' if hw.docker else 'no'}")
     return lines
-
-

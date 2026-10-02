@@ -1,25 +1,33 @@
 """Model router: resolves a slot to a concrete model by walking the profile's fallback chain,
 tracks tokens and estimated cost, and enforces the per-run USD cap.
 """
+
 from __future__ import annotations
 
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Protocol
+from typing import Protocol
 
 from ..config import Profile
 from .anthropic_provider import AnthropicProvider
 from .base import Completion, Message, NotConfigured, ProviderError, ToolSpec, Usage
 from .openai_compat import ENDPOINTS, OpenAICompatProvider
 
-
 OnToken = Callable[[str], None]
 
 
 class Provider(Protocol):
-    def complete(self, model_name: str, messages: list[Message], tools: list[ToolSpec] | None,
-                 max_tokens: int, temperature: float, on_token: OnToken | None = None) -> Completion: ...
+    def complete(
+        self,
+        model_name: str,
+        messages: list[Message],
+        tools: list[ToolSpec] | None,
+        max_tokens: int,
+        temperature: float,
+        on_token: OnToken | None = None,
+    ) -> Completion: ...
 
 
 # USD per 1M tokens (input, output). Approximate list prices; used for *estimates* only.
@@ -108,14 +116,19 @@ class CostTracker:
 class Router:
     """Resolve slots → models with fallback. One instance per run."""
 
-    def __init__(self, profile: Profile, tracker: CostTracker | None = None,
-                 max_usd: float | None = None, on_fallback: Callable[[str, str, str], None] | None = None):
+    def __init__(
+        self,
+        profile: Profile,
+        tracker: CostTracker | None = None,
+        max_usd: float | None = None,
+        on_fallback: Callable[[str, str, str], None] | None = None,
+    ):
         self.profile = profile
         self.tracker = tracker or CostTracker()
         self.max_usd = profile.limits.max_usd_per_run if max_usd is None else max_usd
         self.on_fallback = on_fallback
         self._providers: dict[str, Provider] = {}
-        self._dead: set[str] = set()       # models that failed non-retryably this run
+        self._dead: set[str] = set()  # models that failed non-retryably this run
         self._sticky: dict[str, str] = {}  # slot -> last model that worked
         self._overrides: dict[str, Provider] = {}
 
@@ -142,17 +155,29 @@ class Router:
             chain.insert(0, self._sticky[slot])
         return [m for m in chain if m not in self._dead]
 
-    def complete(self, slot: str, messages: list[Message], tools: list[ToolSpec] | None = None,
-                 *, max_tokens: int = 4096, temperature: float = 0.2, role: str = "",
-                 on_token: OnToken | None = None) -> Completion:
+    def complete(
+        self,
+        slot: str,
+        messages: list[Message],
+        tools: list[ToolSpec] | None = None,
+        *,
+        max_tokens: int = 4096,
+        temperature: float = 0.2,
+        role: str = "",
+        on_token: OnToken | None = None,
+    ) -> Completion:
         if self.max_usd is not None and self.max_usd > 0 and self.tracker.total_usd >= self.max_usd:
-            raise BudgetExceeded(f"run cost ${self.tracker.total_usd:.3f} reached cap ${self.max_usd:.2f}")
+            raise BudgetExceeded(
+                f"run cost ${self.tracker.total_usd:.3f} reached cap ${self.max_usd:.2f}"
+            )
 
         errors: list[ProviderError] = []
         for full in self.candidates(slot):
             prefix, _, model_name = full.partition("/")
             if not model_name:
-                errors.append(ProviderError(full, "model id must be 'provider/model'", retryable=False))
+                errors.append(
+                    ProviderError(full, "model id must be 'provider/model'", retryable=False)
+                )
                 self._dead.add(full)
                 continue
             try:
@@ -165,8 +190,9 @@ class Router:
             t0 = time.time()
             try:
                 try:
-                    comp = provider.complete(model_name, messages, tools, max_tokens, temperature,
-                                             on_token=on_token)
+                    comp = provider.complete(
+                        model_name, messages, tools, max_tokens, temperature, on_token=on_token
+                    )
                 except TypeError as te:
                     if "on_token" not in str(te):
                         raise
@@ -187,10 +213,13 @@ class Router:
             if self.max_usd is not None and self.max_usd == 0 and usd > 0:
                 # free profile: refuse to spend even if a key happens to be set
                 self._dead.add(full)
-                errors.append(ProviderError(full, "would cost money but profile cap is $0", retryable=False))
+                errors.append(
+                    ProviderError(full, "would cost money but profile cap is $0", retryable=False)
+                )
                 continue
-            self.tracker.record(CallRecord(time.time(), slot, comp.model, comp.usage, usd,
-                                           time.time() - t0, role))
+            self.tracker.record(
+                CallRecord(time.time(), slot, comp.model, comp.usage, usd, time.time() - t0, role)
+            )
             self._sticky[slot] = full
             return comp
 

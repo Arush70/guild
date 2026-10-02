@@ -7,8 +7,14 @@ from guild.cli import app
 
 
 def _machine(vram=None, ram=None, models=(), keys=None):
-    m = hw.Hardware(ram_gb=ram, vram_gb=vram, gpu="GPU" if vram else None,
-                    ollama_reachable=bool(models), ollama_models=list(models), git=True)
+    m = hw.Hardware(
+        ram_gb=ram,
+        vram_gb=vram,
+        gpu="GPU" if vram else None,
+        ollama_reachable=bool(models),
+        ollama_models=list(models),
+        git=True,
+    )
     m.keys = keys or {}
     return m
 
@@ -24,7 +30,11 @@ def test_recommend_for_24gb_gpu_and_tiny_cpu_box():
     big = hw.recommend_local(_machine(vram=24, ram=64))
     assert big["coder"][0] == "ollama/qwen3-coder:30b"
     tiny = hw.recommend_local(_machine(ram=8))
-    assert all(m in {"ollama/qwen2.5-coder:3b", "ollama/qwen2.5-coder:1.5b"} for c in tiny.values() for m in c)
+    assert all(
+        m in {"ollama/qwen2.5-coder:3b", "ollama/qwen2.5-coder:1.5b"}
+        for c in tiny.values()
+        for m in c
+    )
     assert all(len(c) >= 1 for c in tiny.values())
 
 
@@ -34,7 +44,10 @@ def test_build_profile_free_uses_keys_and_no_paid_models():
     assert p["limits"]["max_usd_per_run"] == 0
     assert not any(m.startswith(("anthropic/", "openai/")) for c in p["slots"].values() for m in c)
     lite = hw.build_profile(_machine(vram=8), "lite")
-    assert lite["slots"]["frontier"][0].startswith("anthropic/") and "coder_escalation" in lite["slots"]
+    assert (
+        lite["slots"]["frontier"][0].startswith("anthropic/")
+        and "coder_escalation" in lite["slots"]
+    )
 
 
 def test_missing_pulls():
