@@ -86,6 +86,17 @@ class Hub:
     def busy(self) -> bool:
         return self.job is not None and self.job.status == "running"
 
+    def reset(self, root: Path) -> None:
+        """Point the hub at another project. Subscribers (open SSE streams) are kept, so the
+        browser keeps receiving events after a project switch; history is per project."""
+        with self.lock:
+            self.root = root
+            self.job = None
+            self.history = []
+            self._tok_buf.clear()
+            self._tok_role = ""
+        self.publish({"kind": "project_switched", "root": str(root)})
+
     # -- streaming tokens: coalesce into ~80ms batches so the browser isn't flooded
     def token(self, role: str, chunk: str) -> None:
         with self.lock:
@@ -112,10 +123,11 @@ class Hub:
             q.put(ev)  # tokens are not kept in history — they're ephemeral
 
     def start(self, kind: str, fn) -> Job:
-        if self.busy():
-            raise HTTPException(409, f"a {self.job.kind} job is already running")
-        job = Job(kind=kind)
-        self.job = job
+        with self.lock:  # check-and-set under the lock: two clicks must not start two jobs
+            if self.busy():
+                raise HTTPException(409, f"a {self.job.kind} job is already running")
+            job = Job(kind=kind)
+            self.job = job
 
         def _run():
             try:
@@ -209,7 +221,7 @@ class _State:
 
     def switch(self, root: Path) -> None:
         self.root = root.resolve()
-        self.hub = Hub(self.root)
+        self.hub.reset(self.root)  # same Hub object: open SSE connections stay subscribed
         self.chat_history = []
 
 

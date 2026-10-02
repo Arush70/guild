@@ -56,6 +56,7 @@ class Role(BaseModel):
     tools: list[str] = Field(default_factory=list)
     max_tool_calls: int = 30
     write_allowlist: list[str] | None = None
+    readonly: bool | None = None  # None = infer from tools/name (reviewers are read-only)
     description: str = ""
     system_prompt: str
 

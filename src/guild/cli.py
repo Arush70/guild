@@ -9,6 +9,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -38,7 +39,7 @@ def _report(level: str, msg: str) -> None:
         level, ""
     )
     prefix = {"phase": "▶", "warn": "!", "info": "·", "error": "✖"}.get(level, "")
-    console.print(f"[{style}]{prefix} {msg}[/{style}]")
+    console.print(f"[{style}]{prefix} {escape(msg)}[/{style}]")  # model text may contain [..]
 
 
 def _load(project: Path | None, profile_override: str | None):
@@ -176,6 +177,25 @@ def init(
             subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=False)
             if (root / ".git").is_dir():
                 console.print("[green]initialised git repository (branch main)[/green]")
+                _ensure_gitignore(root)
+                # guild branches from HEAD; an unborn HEAD means no branches and no commits
+                subprocess.run(["git", "add", "-A"], cwd=root, check=False)
+                r = subprocess.run(
+                    ["git", "commit", "-q", "-m", "initial commit (guild init)"],
+                    cwd=root,
+                    check=False,
+                    capture_output=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                if r.returncode == 0:
+                    console.print("[green]created initial commit[/green]")
+                else:
+                    console.print(
+                        "[yellow]could not create the initial commit "
+                        "(set git user.name/user.email, then: git add -A && git commit -m init)"
+                        "[/yellow]"
+                    )
 
     # -- write config + tailored profile
     cfg = ProjectConfig(profile=profile, test_command=test_command, sandbox=sandbox)
@@ -204,15 +224,7 @@ def init(
                 "[green]created:[/green] " + ", ".join(created) + "  — fill in PRD.md first"
             )
 
-    gi = root / ".gitignore"
-    line = f"{GUILD_DIR}/runs/\n"
-    if not gi.exists() or line.strip() not in gi.read_text(encoding="utf-8"):
-        with open(gi, "a", encoding="utf-8") as f:
-            f.write(
-                ("\n" if gi.exists() else "")
-                + "# guild run traces (may contain code excerpts)\n"
-                + line
-            )
+    _ensure_gitignore(root)
 
     # -- what to pull
     pulls = (
@@ -266,6 +278,35 @@ def _scaffold_docs(root: Path) -> list[str]:
         dst.write_text(tdir.joinpath(src).read_text(encoding="utf-8"), encoding="utf-8")
         created.append(rel)
     return created
+
+
+_GITIGNORE_LINES = (
+    ("# guild run traces (may contain code excerpts)", f"{GUILD_DIR}/runs/"),
+    ("# caches guild's test runs create", "__pycache__/"),
+    (None, "*.pyc"),
+    (None, ".pytest_cache/"),
+    (None, ".ruff_cache/"),
+    (None, ".mypy_cache/"),
+)
+
+
+def _ensure_gitignore(root: Path) -> None:
+    """Add the lines guild relies on (idempotent; keeps whatever is already there)."""
+    gi = root / ".gitignore"
+    existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
+    have = {ln.strip() for ln in existing.splitlines()}
+    add: list[str] = []
+    for comment, line in _GITIGNORE_LINES:
+        if line in have or line.rstrip("/") in have:
+            continue
+        if comment:
+            add.append(comment)
+        add.append(line)
+    if add:
+        with open(gi, "a", encoding="utf-8") as f:
+            f.write(
+                ("\n" if existing and not existing.endswith("\n") else "") + "\n".join(add) + "\n"
+            )
 
 
 @app.command()
@@ -498,24 +539,28 @@ def _show_outcome(out) -> None:
         f"rounds={out.rounds}  escalated={out.escalated}  cost=${out.cost_usd:.4f}"
     ]
     if out.task.branch:
-        lines.append(f"branch: {out.task.branch}   (review and merge it yourself)")
+        lines.append(f"branch: {escape(out.task.branch)}   (review and merge it yourself)")
     if out.verification:
         v = out.verification
         status = "pass" if v.get("passed") else "FAIL"
         lines.append(f"tests: {status} ({v.get('tests_run', '?')} run)")
     for label, rev in (("critic", out.critic), ("security", out.security)):
         if rev:
-            lines.append(f"{label}: {rev.get('verdict')} — {rev.get('summary', '')[:200]}")
+            summary = escape(str(rev.get("summary") or "")[:200])
+            lines.append(f"{label}: {rev.get('verdict')} — {summary}")
             for f in rev.get("findings", [])[:8]:
-                lines.append(f"   [{f.get('severity')}] {f.get('file')}: {f.get('issue')}")
+                sev, file, issue = (
+                    escape(str(f.get(k) or "")) for k in ("severity", "file", "issue")
+                )
+                lines.append(f"   \\[{sev}] {file}: {issue}")
     if out.lead_decision:
         ld = out.lead_decision
-        lines.append(f"lead: {ld.get('decision')} — {ld.get('notes', '')[:300]}")
+        lines.append(f"lead: {ld.get('decision')} — {escape(str(ld.get('notes') or '')[:300])}")
         for imp in out.lead_decision.get("improvements", [])[:5]:
-            lines.append(f"   ↳ suggestion: {imp}")
+            lines.append(f"   ↳ suggestion: {escape(str(imp))}")
     if out.task.status == "blocked":
-        lines.append(f"[red]blocked:[/red] {out.task.notes}")
-    console.print(Panel("\n".join(lines), title=f"{out.task.id} {out.task.title}"))
+        lines.append(f"[red]blocked:[/red] {escape(out.task.notes)}")
+    console.print(Panel("\n".join(lines), title=escape(f"{out.task.id} {out.task.title}")))
 
 
 @app.command()

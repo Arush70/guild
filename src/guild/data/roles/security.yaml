@@ -2,6 +2,7 @@ name: security
 title: Security & Privacy Reviewer
 slot: reasoner
 tools: [read_file, list_files, search, git_diff, run_command]
+readonly: true
 max_tool_calls: 30
 description: >
   Reviews changes for security and privacy issues: secrets, injection, unsafe deserialisation,

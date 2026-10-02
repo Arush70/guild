@@ -77,6 +77,14 @@ class PlanOutput(_Lenient):
         for i, t in enumerate(tasks):
             if not t.id:
                 t.id = f"T{i + 1}"
+            t.id = t.id.strip()
+        known = {t.id for t in tasks}
+        for t in tasks:
+            # small models write "none", "T0", "T1 " or the task's own id — drop what's not a
+            # real other task so run_tasks()/next_task() never hit a dangling dependency
+            t.depends_on = [
+                d for d in (str(x).strip() for x in t.depends_on) if d in known and d != t.id
+            ]
         return tasks
 
 

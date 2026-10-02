@@ -38,6 +38,8 @@ class FakeProvider:
                 ToolCall(id=f"c{self._n}_{i}", name=n, arguments=a) for i, (n, a) in enumerate(turn)
             ]
             msg = Message("assistant", "", tool_calls=calls)
+        elif isinstance(turn, str):
+            msg = Message("assistant", turn)  # raw text, e.g. a reply with no JSON at all
         else:
             msg = Message("assistant", json.dumps(turn))
         return Completion(msg, Usage(100, 50), f"fake/{model_name}", "stop")

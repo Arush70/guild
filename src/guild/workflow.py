@@ -29,6 +29,9 @@ from .sandbox import make_sandbox
 from .tools import ToolContext
 from .trace import Trace, new_run_id
 
+# Roles that must never change the project, even if their YAML lists run_command.
+READONLY_ROLES = frozenset({"critic", "security", "verifier", "assistant", "performance"})
+
 
 @dataclass
 class Task:
@@ -41,6 +44,7 @@ class Task:
     status: str = "todo"  # todo | in_progress | done | blocked
     branch: str | None = None
     notes: str = ""
+    merged: bool = False  # set by the dashboard after the human merges the branch
 
 
 _VAGUE = (
@@ -81,6 +85,25 @@ def vague_done_when(text: str) -> bool:
     )
 
 
+# Caches created while guild runs tests must never end up in its commits (git pathspecs).
+_COMMIT_EXCLUDES = (
+    ":(exclude,glob)**/__pycache__/**",
+    ":(exclude,glob)__pycache__/**",
+    ":(exclude)*.pyc",
+    ":(exclude,glob)**/.pytest_cache/**",
+    ":(exclude,glob).pytest_cache/**",
+    ":(exclude,glob)**/.ruff_cache/**",
+    ":(exclude,glob).ruff_cache/**",
+    ":(exclude,glob)**/.mypy_cache/**",
+    ":(exclude,glob).mypy_cache/**",
+)
+
+
+def _task_from_dict(t: dict) -> Task:
+    known = Task.__dataclass_fields__
+    return Task(**{k: v for k, v in t.items() if k in known})
+
+
 @dataclass
 class Plan:
     goal: str
@@ -105,7 +128,7 @@ class Plan:
         return cls(
             goal=d["goal"],
             roadmap=d.get("roadmap", []),
-            tasks=[Task(**t) for t in d.get("tasks", [])],
+            tasks=[_task_from_dict(t) for t in d.get("tasks", [])],
             risks=d.get("risks", []),
             questions_for_owner=d.get("questions_for_owner", []),
             created=d.get("created", time.time()),
@@ -198,11 +221,10 @@ class Guild:
 
     def _ctx(self, role: Role) -> ToolContext:
         mutating = {"write_file", "edit_file", "run_command"}
-        readonly = not any(t in mutating for t in role.tools) or role.name in {
-            "critic",
-            "security",
-            "verifier",
-        }
+        if role.readonly is not None:
+            readonly = role.readonly
+        else:
+            readonly = not any(t in mutating for t in role.tools) or role.name in READONLY_ROLES
         ctx = ToolContext(
             root=self.root,
             ignore=self.cfg.ignore,
@@ -353,7 +375,17 @@ class Guild:
         dirty; pre-existing untracked files are tolerated and kept out of guild's commits."""
         self._on_branch = False
         self._pre_untracked = set()
+        self._base_branch = None
         if not self._has_git() or self.dry_run:
+            return None
+        if not self._git("rev-parse", "--verify", "--quiet", "HEAD").startswith(
+            tuple("0123456789abcdef")
+        ):
+            self.report(
+                "warn",
+                "git repository has no commits yet; guild will not create a branch and will "
+                'NOT commit. Run: git add -A && git commit -m "initial commit"',
+            )
             return None
         slug = "".join(c if c.isalnum() else "-" for c in task.title.lower())[:40].strip("-")
         branch = f"guild/{task.id.lower()}-{slug}"
@@ -375,15 +407,32 @@ class Guild:
         self._pre_untracked = set(
             filter(None, self._git("ls-files", "--others", "--exclude-standard").splitlines())
         )
+        # Remember where we started. An accepted task stays on its branch so dependent tasks
+        # build on it (run all); a rejected task goes back here so its broken work never leaks
+        # into the next task's branch.
+        current = self.current_branch()
+        self._base_branch = current if current and current != "HEAD" else None
         self._git("checkout", "-B", branch, check=True)
         self._on_branch = True
         return branch
+
+    def _leave_branch(self) -> None:
+        """After a task that was NOT accepted (or crashed): go back to the branch the task
+        started from, so the next task does not build on broken work. The attempt stays on its
+        guild/ branch for inspection; the dashboard can still diff/discard it."""
+        base = getattr(self, "_base_branch", None)
+        if not base or not getattr(self, "_on_branch", False) or not self._has_git():
+            return
+        if self._git("status", "--porcelain", "--untracked-files=no"):
+            return  # never discard uncommitted work; stay where we are
+        self._git("checkout", "-q", base)
+        self._on_branch = False
 
     def _commit(self, message: str) -> None:
         # Never commit unless we are on a branch guild created — protects main/master.
         if not self._has_git() or self.dry_run or not getattr(self, "_on_branch", False):
             return
-        self._git("add", "-A", "--", ".", f":(exclude){GUILD_DIR}")
+        self._git("add", "-A", "--", ".", f":(exclude){GUILD_DIR}", *_COMMIT_EXCLUDES)
         for f in getattr(self, "_pre_untracked", ()):
             self._git("reset", "-q", "--", f)
         if (
@@ -431,8 +480,18 @@ class Guild:
     def merge_branch(self, branch: str, base: str | None = None) -> dict:
         """Merge a guild branch into the base branch. Refuses on a dirty tree or conflicts."""
         base = base or self.default_branch()
+        if base == branch:
+            return {"ok": False, "error": f"cannot merge {branch} into itself (no base branch)"}
+        if not self._git("rev-parse", "--verify", "--quiet", branch):
+            return {"ok": False, "error": f"branch {branch} does not exist"}
         if self._git(
-            "status", "--porcelain", "--", ".", f":(exclude){GUILD_DIR}", ":(exclude).gitignore"
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+            "--",
+            ".",
+            f":(exclude){GUILD_DIR}",
+            ":(exclude).gitignore",
         ):
             return {"ok": False, "error": "working tree is dirty; commit or stash first"}
         self._git("checkout", "-q", base, check=True)
@@ -440,8 +499,15 @@ class Guild:
         if "CONFLICT" in out or self._git("ls-files", "-u"):
             self._git("merge", "--abort")
             return {"ok": False, "error": f"merge conflict; resolve manually:\n{out}"}
-        self._git("branch", "-d", branch)
-        return {"ok": True, "base": base, "merged": branch, "output": out}
+        if "fatal" in out or "error" in out:
+            return {"ok": False, "error": out}
+        deleted = self._git("branch", "-d", branch)
+        return {
+            "ok": True,
+            "base": base,
+            "merged": branch,
+            "output": (out + "\n" + deleted).strip(),
+        }
 
     def discard_branch(self, branch: str) -> dict:
         base = self.default_branch()
@@ -531,6 +597,7 @@ class Guild:
                 task.status = "todo"
                 task.notes = f"guild error: {type(e).__name__}: {e}"
                 self.save_plan(plan)
+            self._leave_branch()
             raise
 
     def _run_task(self, plan: Plan, task: Task, *, roles: list[str] | None = None) -> TaskOutcome:
@@ -540,8 +607,12 @@ class Guild:
         task.status = "in_progress"
         self.save_plan(plan)
 
-        base_ref = self._git("rev-parse", "HEAD") if self._has_git() else None
         task.branch = self._start_branch(task)
+        base_ref = (
+            self._git("rev-parse", "--verify", "--quiet", "HEAD") if self._has_git() else None
+        )
+        if base_ref and not re.fullmatch(r"[0-9a-f]{40}", base_ref):
+            base_ref = None  # no commits yet: diff the working tree instead
         cost0 = self.tracker.total_usd
 
         missing = [f for f in task.files if not (self.root / f).exists()]
@@ -711,6 +782,23 @@ class Guild:
                     )
                 ).data
 
+            for label, rev in (("critic", critic), ("security", security)):
+                if label in enabled and rev is None:
+                    # parse + repairs failed: never treat silence as approval
+                    self.report(
+                        "warn", f"{label} returned no valid JSON; treating as changes requested"
+                    )
+                    self.trace.emit("note", role=label, msg="no valid JSON reply; not an approval")
+                    placeholder = {
+                        "verdict": "request_changes",
+                        "summary": f"{label} did not produce a valid review (no JSON reply)",
+                        "findings": [],
+                    }
+                    if label == "critic":
+                        critic = placeholder
+                    else:
+                        security = placeholder
+
             passed = (verification is None) or bool(verification.get("passed"))
             critic_ok = critic is None or critic.get("verdict") == "approve"
             sec_ok = security is None or security.get("verdict") == "approve"
@@ -778,6 +866,8 @@ class Guild:
             task.notes = feedback[:2000]
 
         self.save_plan(plan)
+        if not accepted:
+            self._leave_branch()
         outcome = TaskOutcome(
             task=task,
             accepted=accepted,
