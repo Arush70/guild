@@ -1,10 +1,11 @@
 """A scripted fake provider so the whole workflow can be tested without any API."""
+
 from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import pytest
 
@@ -33,7 +34,9 @@ class FakeProvider:
         turn = queue.pop(0) if queue else {"status": "done", "summary": "default"}
         self._n += 1
         if isinstance(turn, list):
-            calls = [ToolCall(id=f"c{self._n}_{i}", name=n, arguments=a) for i, (n, a) in enumerate(turn)]
+            calls = [
+                ToolCall(id=f"c{self._n}_{i}", name=n, arguments=a) for i, (n, a) in enumerate(turn)
+            ]
             msg = Message("assistant", "", tool_calls=calls)
         else:
             msg = Message("assistant", json.dumps(turn))
@@ -42,30 +45,59 @@ class FakeProvider:
 
 def _role_of(messages: list[Message]) -> str:
     sys = messages[0].content
-    for r in ("Project Lead", "Software Engineer", "Critic", "Verifier", "Security", "Technical Writer", "Researcher"):
+    for r in (
+        "Project Lead",
+        "Software Engineer",
+        "Critic",
+        "Verifier",
+        "Security",
+        "Technical Writer",
+        "Researcher",
+    ):
         if r in sys[:300]:
-            return {"Project Lead": "lead", "Software Engineer": "engineer", "Critic": "critic",
-                    "Verifier": "verifier", "Security": "security", "Technical Writer": "docs",
-                    "Researcher": "researcher"}[r]
+            return {
+                "Project Lead": "lead",
+                "Software Engineer": "engineer",
+                "Critic": "critic",
+                "Verifier": "verifier",
+                "Security": "security",
+                "Technical Writer": "docs",
+                "Researcher": "researcher",
+            }[r]
     return "unknown"
 
 
 @pytest.fixture
 def profile() -> Profile:
-    return Profile(name="test", slots={
-        "frontier": ["fake/big"], "coder": ["fake/small", "fake/small2"],
-        "coder_escalation": ["fake/big"], "reasoner": ["fake/mid"], "cheap": ["fake/tiny"]},
-        limits={"max_revision_rounds": 3, "escalate_after": 2, "max_usd_per_run": 0})
+    return Profile(
+        name="test",
+        slots={
+            "frontier": ["fake/big"],
+            "coder": ["fake/small", "fake/small2"],
+            "coder_escalation": ["fake/big"],
+            "reasoner": ["fake/mid"],
+            "cheap": ["fake/tiny"],
+        },
+        limits={"max_revision_rounds": 3, "escalate_after": 2, "max_usd_per_run": 0},
+    )
 
 
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
     (tmp_path / "app.py").write_text("def add(a, b):\n    return a + b\n")
-    (tmp_path / "test_app.py").write_text("from app import add\n\ndef test_add():\n    assert add(1, 2) == 3\n")
+    (tmp_path / "test_app.py").write_text(
+        "from app import add\n\ndef test_add():\n    assert add(1, 2) == 3\n"
+    )
     (tmp_path / "README.md").write_text("# demo\n")
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=tmp_path, check=True
+    )
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"],
+        cwd=tmp_path,
+        check=True,
+    )
     subprocess.run(["git", "config", "user.email", "t@t"], cwd=tmp_path, check=True)
     subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
     return tmp_path
@@ -73,4 +105,6 @@ def project(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def cfg() -> ProjectConfig:
-    return ProjectConfig(profile="test", test_command="python -m pytest -q -p no:cacheprovider", sandbox="local")
+    return ProjectConfig(
+        profile="test", test_command="python -m pytest -q -p no:cacheprovider", sandbox="local"
+    )

@@ -7,6 +7,7 @@ without a schema (user-defined ones) are accepted as any JSON object.
 Lenient by design: unknown keys are ignored, common near-misses are coerced (a string where a
 list is expected becomes a one-item list; "true"/"yes" become booleans).
 """
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -115,7 +116,11 @@ class ReviewOutput(_Lenient):
     @classmethod
     def _findings(cls, v: Any) -> Any:
         items = _as_list(v)
-        return [{"issue": x} if isinstance(x, str) else x for x in items] if isinstance(items, list) else items
+        return (
+            [{"issue": x} if isinstance(x, str) else x for x in items]
+            if isinstance(items, list)
+            else items
+        )
 
     @field_validator("verdict", mode="before")
     @classmethod

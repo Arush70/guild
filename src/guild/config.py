@@ -6,6 +6,7 @@ Resolution order for both profiles and roles:
 
 So users can override anything by dropping a YAML file into .guild/ without forking.
 """
+
 from __future__ import annotations
 
 import os
@@ -68,8 +69,18 @@ class ProjectConfig(BaseModel):
     sandbox: str = "local"  # "local" | "docker"
     docker_image: str = "python:3.11-slim"
     ignore: list[str] = Field(
-        default_factory=lambda: [".git", ".guild", "node_modules", ".venv", "venv",
-                                 "__pycache__", "*.pyc", "dist", "build", ".mypy_cache"]
+        default_factory=lambda: [
+            ".git",
+            ".guild",
+            "node_modules",
+            ".venv",
+            "venv",
+            "__pycache__",
+            "*.pyc",
+            "dist",
+            "build",
+            ".mypy_cache",
+        ]
     )
     roles_enabled: list[str] = Field(
         default_factory=lambda: ["lead", "engineer", "verifier", "critic", "security", "docs"]
@@ -99,7 +110,9 @@ def _find(kind: str, name: str, project: Path | None) -> Path:
     for c in candidates:
         if c.exists():
             return c
-    raise FileNotFoundError(f"no {kind[:-1]} named '{name}' (looked in {[str(c) for c in candidates]})")
+    raise FileNotFoundError(
+        f"no {kind[:-1]} named '{name}' (looked in {[str(c) for c in candidates]})"
+    )
 
 
 def load_profile(name: str, project: Path | None = None) -> Profile:

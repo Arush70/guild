@@ -3,15 +3,17 @@
 Adding a tool: write a function taking (ctx, **kwargs) -> str, wrap it with @tool(...).
 Roles pick tools by name in their YAML `tools:` list.
 """
+
 from __future__ import annotations
 
 import fnmatch
 import os
 import re
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from ..providers.base import ToolSpec
 
@@ -47,9 +49,10 @@ class ToolContext:
     def check_write(self, rel: str) -> None:
         if self.readonly:
             raise PermissionError("this role is read-only")
-        if self.write_allowlist is not None:
-            if not any(fnmatch.fnmatch(rel, pat) for pat in self.write_allowlist):
-                raise PermissionError(f"role may only write to {self.write_allowlist}; refused {rel}")
+        if self.write_allowlist is not None and not any(
+            fnmatch.fnmatch(rel, pat) for pat in self.write_allowlist
+        ):
+            raise PermissionError(f"role may only write to {self.write_allowlist}; refused {rel}")
 
 
 ToolFn = Callable[..., str]
@@ -69,6 +72,7 @@ def tool(name: str, description: str, parameters: dict[str, Any], mutating: bool
     def deco(fn: ToolFn) -> ToolFn:
         REGISTRY[name] = Tool(ToolSpec(name, description, parameters), fn, mutating)
         return fn
+
     return deco
 
 
@@ -76,15 +80,24 @@ def _clip(s: str, n: int = MAX_OUTPUT) -> str:
     if len(s) <= n:
         return s
     head = s[: n // 2]
-    tail = s[-n // 2:]
+    tail = s[-n // 2 :]
     return f"{head}\n...[{len(s) - n} chars omitted]...\n{tail}"
 
 
 # ---------------------------------------------------------------------------- filesystem
 
-@tool("list_files", "List files in the project (or a subdirectory), respecting ignore rules.",
-      {"type": "object", "properties": {"path": {"type": "string", "description": "relative dir, default '.'"},
-                                        "max": {"type": "integer", "default": 300}}})
+
+@tool(
+    "list_files",
+    "List files in the project (or a subdirectory), respecting ignore rules.",
+    {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "relative dir, default '.'"},
+            "max": {"type": "integer", "default": 300},
+        },
+    },
+)
 def list_files(ctx: ToolContext, path: str = ".", max: int = 300) -> str:
     base = ctx.resolve(path)
     if not base.is_dir():
@@ -108,11 +121,22 @@ def list_files(ctx: ToolContext, path: str = ".", max: int = 300) -> str:
     return "\n".join(out) or "(empty)"
 
 
-@tool("read_file", "Read a text file. Optionally a line range.",
-      {"type": "object", "required": ["path"],
-       "properties": {"path": {"type": "string"}, "start_line": {"type": "integer"},
-                      "end_line": {"type": "integer"}}})
-def read_file(ctx: ToolContext, path: str, start_line: int | None = None, end_line: int | None = None) -> str:
+@tool(
+    "read_file",
+    "Read a text file. Optionally a line range.",
+    {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+            "path": {"type": "string"},
+            "start_line": {"type": "integer"},
+            "end_line": {"type": "integer"},
+        },
+    },
+)
+def read_file(
+    ctx: ToolContext, path: str, start_line: int | None = None, end_line: int | None = None
+) -> str:
     p = ctx.resolve(path)
     if not p.is_file():
         return f"no such file: {path}"
@@ -124,24 +148,38 @@ def read_file(ctx: ToolContext, path: str, start_line: int | None = None, end_li
     lines = text.splitlines()
     s = max(1, start_line or 1)
     e = min(len(lines), end_line or len(lines))
-    numbered = [f"{i:5d}| {lines[i-1]}" for i in range(s, e + 1)]
+    numbered = [f"{i:5d}| {lines[i - 1]}" for i in range(s, e + 1)]
     return _clip("\n".join(numbered) or "(empty file)")
 
 
-@tool("write_file", "Create or fully overwrite a file with the given content.",
-      {"type": "object", "required": ["path", "content"],
-       "properties": {"path": {"type": "string"}, "content": {"type": "string"}}}, mutating=True)
+@tool(
+    "write_file",
+    "Create or fully overwrite a file with the given content.",
+    {
+        "type": "object",
+        "required": ["path", "content"],
+        "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+    },
+    mutating=True,
+)
 def write_file(ctx: ToolContext, path: str, content: str) -> str:
     ctx.check_write(path)
     p = ctx.resolve(path)
     existed = p.exists()
     key = _norm(path)
-    if existed and p.stat().st_size > 0 and key not in ctx.files_read and key not in ctx.files_written:
+    if (
+        existed
+        and p.stat().st_size > 0
+        and key not in ctx.files_read
+        and key not in ctx.files_written
+    ):
         # Small models happily overwrite files they never looked at, deleting existing code and
         # tests. Force a read first so the rewrite can preserve what's there.
-        return (f"refused: {path} already exists and you have not read it. Call read_file(\"{path}\") "
-                f"first, then either edit_file to change specific parts or write_file with the FULL "
-                f"updated content that keeps everything not covered by the task.")
+        return (
+            f'refused: {path} already exists and you have not read it. Call read_file("{path}") '
+            f"first, then either edit_file to change specific parts or write_file with the FULL "
+            f"updated content that keeps everything not covered by the task."
+        )
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
     ctx.files_written.add(key)
@@ -149,20 +187,37 @@ def write_file(ctx: ToolContext, path: str, content: str) -> str:
 
 
 def _norm(path: str) -> str:
-    return os.path.normpath(path).replace("\\", "/").lstrip("./") or path
+    """Key used to track read/written files: forward slashes, no leading './'."""
+    n = os.path.normpath(path).replace("\\", "/")
+    while n.startswith("./"):
+        n = n[2:]
+    return n or path
 
 
-@tool("edit_file", "Replace an exact substring in a file with new text. old_text must occur exactly once.",
-      {"type": "object", "required": ["path", "old_text", "new_text"],
-       "properties": {"path": {"type": "string"}, "old_text": {"type": "string"},
-                      "new_text": {"type": "string"}}}, mutating=True)
+@tool(
+    "edit_file",
+    "Replace an exact substring in a file with new text. old_text must occur exactly once.",
+    {
+        "type": "object",
+        "required": ["path", "old_text", "new_text"],
+        "properties": {
+            "path": {"type": "string"},
+            "old_text": {"type": "string"},
+            "new_text": {"type": "string"},
+        },
+    },
+    mutating=True,
+)
 def edit_file(ctx: ToolContext, path: str, old_text: str, new_text: str) -> str:
     ctx.check_write(path)
     p = ctx.resolve(path)
     if not p.is_file():
         return f"no such file: {path}"
     if not old_text:
-        return "old_text must not be empty — to append, include the last line of the file in old_text; to create a file, use write_file"
+        return (
+            "old_text must not be empty — to append, include the last line of the file in "
+            "old_text; to create a file, use write_file"
+        )
     text = p.read_text(encoding="utf-8")
     n = text.count(old_text)
     if n == 0:
@@ -174,12 +229,23 @@ def edit_file(ctx: ToolContext, path: str, old_text: str, new_text: str) -> str:
     return f"edited {path}"
 
 
-@tool("search", "Search file contents with a regex (like grep -rn). Returns file:line: match.",
-      {"type": "object", "required": ["pattern"],
-       "properties": {"pattern": {"type": "string"}, "path": {"type": "string", "default": "."},
-                      "glob": {"type": "string", "description": "e.g. *.py"},
-                      "max": {"type": "integer", "default": 100}}})
-def search(ctx: ToolContext, pattern: str, path: str = ".", glob: str | None = None, max: int = 100) -> str:
+@tool(
+    "search",
+    "Search file contents with a regex (like grep -rn). Returns file:line: match.",
+    {
+        "type": "object",
+        "required": ["pattern"],
+        "properties": {
+            "pattern": {"type": "string"},
+            "path": {"type": "string", "default": "."},
+            "glob": {"type": "string", "description": "e.g. *.py"},
+            "max": {"type": "integer", "default": 100},
+        },
+    },
+)
+def search(
+    ctx: ToolContext, pattern: str, path: str = ".", glob: str | None = None, max: int = 100
+) -> str:
     try:
         rx = re.compile(pattern)
     except re.error as e:
@@ -207,10 +273,20 @@ def search(ctx: ToolContext, pattern: str, path: str = ".", glob: str | None = N
 
 # ---------------------------------------------------------------------------- execution
 
-@tool("run_command", "Run a shell command in the project sandbox (timeout 120s). Use for builds, linters, scripts.",
-      {"type": "object", "required": ["command"],
-       "properties": {"command": {"type": "string"}, "timeout": {"type": "integer", "default": 120}}},
-      mutating=True)
+
+@tool(
+    "run_command",
+    "Run a shell command in the project sandbox (timeout 120s). Use for builds, linters, scripts.",
+    {
+        "type": "object",
+        "required": ["command"],
+        "properties": {
+            "command": {"type": "string"},
+            "timeout": {"type": "integer", "default": 120},
+        },
+    },
+    mutating=True,
+)
 def run_command(ctx: ToolContext, command: str, timeout: int = 120) -> str:
     if ctx.readonly and _looks_mutating(command):
         return "refused: this role is read-only and the command looks like it modifies state"
@@ -218,15 +294,20 @@ def run_command(ctx: ToolContext, command: str, timeout: int = 120) -> str:
     return _clip(f"exit={res.returncode}\n{res.output}")
 
 
-@tool("run_tests", "Run the project's configured test command in the sandbox.",
-      {"type": "object", "properties": {"extra_args": {"type": "string", "default": ""}}})
+@tool(
+    "run_tests",
+    "Run the project's configured test command in the sandbox.",
+    {"type": "object", "properties": {"extra_args": {"type": "string", "default": ""}}},
+)
 def run_tests(ctx: ToolContext, extra_args: str = "") -> str:
     cmd = f"{ctx.test_command} {extra_args}".strip()
     res = ctx.sandbox.run(cmd, timeout=600)
     return _clip(f"$ {cmd}\nexit={res.returncode}\n{res.output}")
 
 
-_MUTATING_RX = re.compile(r"\b(rm|mv|cp|chmod|chown|git\s+(commit|push|reset|checkout|clean)|pip\s+install|npm\s+install|>|>>|tee)\b")
+_MUTATING_RX = re.compile(
+    r"\b(rm|mv|cp|chmod|chown|git\s+(commit|push|reset|checkout|clean)|pip\s+install|npm\s+install|>|>>|tee)\b"
+)
 
 
 def _looks_mutating(cmd: str) -> bool:
@@ -234,6 +315,7 @@ def _looks_mutating(cmd: str) -> bool:
 
 
 # ---------------------------------------------------------------------------- git
+
 
 def _git(ctx: ToolContext, *args: str) -> str:
     try:
@@ -243,14 +325,26 @@ def _git(ctx: ToolContext, *args: str) -> str:
     return (r.stdout + r.stderr).strip()
 
 
-@tool("git_status", "Show git status (short) and current branch.", {"type": "object", "properties": {}})
+@tool(
+    "git_status",
+    "Show git status (short) and current branch.",
+    {"type": "object", "properties": {}},
+)
 def git_status(ctx: ToolContext) -> str:
     return _clip(_git(ctx, "status", "--short", "--branch") or "(clean)")
 
 
-@tool("git_diff", "Show the diff of uncommitted changes (or against a ref).",
-      {"type": "object", "properties": {"ref": {"type": "string", "description": "e.g. HEAD, main"},
-                                        "stat_only": {"type": "boolean", "default": False}}})
+@tool(
+    "git_diff",
+    "Show the diff of uncommitted changes (or against a ref).",
+    {
+        "type": "object",
+        "properties": {
+            "ref": {"type": "string", "description": "e.g. HEAD, main"},
+            "stat_only": {"type": "boolean", "default": False},
+        },
+    },
+)
 def git_diff(ctx: ToolContext, ref: str = "", stat_only: bool = False) -> str:
     args = ["diff"]
     if stat_only:
@@ -262,10 +356,15 @@ def git_diff(ctx: ToolContext, ref: str = "", stat_only: bool = False) -> str:
 
 # ---------------------------------------------------------------------------- web
 
-@tool("web_fetch", "Fetch a URL and return its text (HTML tags stripped). For documentation lookups.",
-      {"type": "object", "required": ["url"], "properties": {"url": {"type": "string"}}})
+
+@tool(
+    "web_fetch",
+    "Fetch a URL and return its text (HTML tags stripped). For documentation lookups.",
+    {"type": "object", "required": ["url"], "properties": {"url": {"type": "string"}}},
+)
 def web_fetch(ctx: ToolContext, url: str) -> str:
     import httpx
+
     if not url.startswith(("http://", "https://")):
         return "only http(s) URLs are allowed"
     try:
@@ -280,6 +379,7 @@ def web_fetch(ctx: ToolContext, url: str) -> str:
 
 
 # ---------------------------------------------------------------------------- dispatch
+
 
 def specs_for(names: list[str]) -> list[ToolSpec]:
     missing = [n for n in names if n not in REGISTRY]
@@ -299,5 +399,5 @@ def dispatch(ctx: ToolContext, name: str, args: dict[str, Any]) -> str:
         return f"refused: {e}"
     except TypeError as e:
         return f"bad arguments for {name}: {e}"
-    except Exception as e:  # noqa: BLE001 — tool errors go back to the model, not up the stack
+    except Exception as e:
         return f"tool error ({type(e).__name__}): {e}"

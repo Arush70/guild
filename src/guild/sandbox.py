@@ -6,6 +6,7 @@
 
 Both strip API keys from the environment so a model can never read them via `env`.
 """
+
 from __future__ import annotations
 
 import os
@@ -36,10 +37,21 @@ class LocalSandbox:
 
     def run(self, command: str, timeout: int = 120) -> RunResult:
         try:
-            r = subprocess.run(command, shell=True, cwd=self.root, capture_output=True, text=True,
-                               timeout=timeout, env=_clean_env())
+            r = subprocess.run(
+                command,
+                shell=True,
+                cwd=self.root,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=_clean_env(),
+            )
         except subprocess.TimeoutExpired as e:
-            out = (e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+            out = (
+                (e.stdout or b"").decode(errors="replace")
+                if isinstance(e.stdout, bytes)
+                else (e.stdout or "")
+            )
             return RunResult(124, f"{out}\n[timed out after {timeout}s]", timed_out=True)
         return RunResult(r.returncode, r.stdout + r.stderr)
 
@@ -55,13 +67,26 @@ class DockerSandbox:
             raise RuntimeError("docker not found on PATH; set sandbox: local in .guild/config.yaml")
 
     def run(self, command: str, timeout: int = 120) -> RunResult:
-        args = ["docker", "run", "--rm", "-v", f"{self.root.resolve()}:/work", "-w", "/work",
-                "--memory", "2g", "--cpus", "2"]
+        args = [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{self.root.resolve()}:/work",
+            "-w",
+            "/work",
+            "--memory",
+            "2g",
+            "--cpus",
+            "2",
+        ]
         if not self.network:
             args += ["--network", "none"]
         args += [self.image, "sh", "-c", command]
         try:
-            r = subprocess.run(args, capture_output=True, text=True, timeout=timeout + 15, env=_clean_env())
+            r = subprocess.run(
+                args, capture_output=True, text=True, timeout=timeout + 15, env=_clean_env()
+            )
         except subprocess.TimeoutExpired:
             return RunResult(124, f"[timed out after {timeout}s]", timed_out=True)
         return RunResult(r.returncode, r.stdout + r.stderr)
