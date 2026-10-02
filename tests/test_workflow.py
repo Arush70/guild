@@ -23,7 +23,7 @@ VERIFIER_RUNS = [[("run_tests", {})], {"passed": True, "tests_run": 2, "failures
 APPROVE = {"verdict": "approve", "findings": [], "summary": "fine"}
 DONE = {"status": "done", "summary": "touched", "files_changed": ["notes.txt"], "tests_run": "", "notes_for_reviewer": ""}
 # an engineer turn that actually changes a file (the workflow refuses "done" with no changes)
-ENG_TOUCH = [[("write_file", {"path": "notes.txt", "content": "touched\n"})], DONE]
+ENG_TOUCH = [[("read_file", {"path": "notes.txt"}), ("write_file", {"path": "notes.txt", "content": "touched\n"})], DONE]
 LEAD_ACCEPT = {"decision": "ACCEPT", "notes": "good", "improvements": ["add type hints"]}
 DOCS = [[("edit_file", {"path": "README.md", "old_text": "# demo\n", "new_text": "# demo\n\nHas multiply.\n"})],
         {"files_changed": ["README.md"], "summary": "documented multiply"}]
@@ -360,3 +360,38 @@ def test_project_docs_reach_the_lead(project, cfg, profile):
     g.close()
     assert "PRD (docs/PRD.md)" in seen["ctx"] and "payments" in seen["ctx"]
     assert "Rules (RULES.md)" in seen["ctx"] and "type hints" in seen["ctx"]
+
+
+def test_overwrite_without_reading_is_refused_then_allowed(project, cfg, profile):
+    """The 7b model rewrote app.py without looking and deleted add(); now it must read first."""
+    eng = [[("write_file", {"path": "app.py", "content": "def multiply(a, b):\n    return a * b\n"})],   # refused
+           [("read_file", {"path": "app.py"}),
+            ("write_file", {"path": "app.py", "content": "def add(a, b):\n    return a + b\n\n\ndef multiply(a, b):\n    return a * b\n"}),
+            ("read_file", {"path": "test_app.py"}),
+            ("write_file", {"path": "test_app.py", "content": "from app import add, multiply\n\ndef test_add():\n    assert add(1, 2) == 3\n\ndef test_multiply():\n    assert multiply(2, 3) == 6\n"})],
+           {"status": "done", "summary": "added multiply, kept add", "files_changed": ["app.py", "test_app.py"], "tests_run": "2 passed", "notes_for_reviewer": ""}]
+    fake = FakeProvider({"engineer": eng, "critic": [APPROVE], "security": [APPROVE], "lead": [LEAD_ACCEPT], "docs": [DOCS[1]]})
+    g = _guild(project, cfg, profile, fake)
+    plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
+    out = g.run_task(plan, plan.tasks[0])
+    g.close()
+    ev = [e for e in read_trace(g.trace.path) if e["kind"] == "tool_call"]
+    assert ev[0]["tool"] == "write_file" and not ev[0]["ok"] and "have not read it" in ev[0]["result_preview"]
+    assert out.accepted and "def add" in (project / "app.py").read_text()
+
+
+def test_deleting_existing_tests_fails_verification(project, cfg, profile):
+    """Even with a green suite, removing a pre-existing test is a verification failure."""
+    eng = [[("read_file", {"path": "app.py"}),
+            ("write_file", {"path": "app.py", "content": "def multiply(a, b):\n    return a * b\n"}),
+            ("read_file", {"path": "test_app.py"}),
+            ("write_file", {"path": "test_app.py", "content": "from app import multiply\n\ndef test_multiply():\n    assert multiply(2, 3) == 6\n"})],
+           {"status": "done", "summary": "replaced add with multiply", "files_changed": ["app.py", "test_app.py"], "tests_run": "1 passed", "notes_for_reviewer": ""}] * 3
+    fake = FakeProvider({"engineer": eng, "critic": [APPROVE] * 3, "security": [APPROVE] * 3})
+    g = _guild(project, cfg, profile, fake)
+    plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
+    out = g.run_task(plan, plan.tasks[0])
+    g.close()
+    assert not out.accepted
+    assert out.verification["passed"] is False and out.verification["removed_tests"] == ["test_app.py::test_add"]
+    assert "EXISTING TESTS REMOVED" in out.task.notes

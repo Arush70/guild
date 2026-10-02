@@ -18,6 +18,9 @@ system_prompt: |
   - If the context includes Architecture, Rules or Design documents, follow them (folder
     layout, layering rules, style). They override your defaults.
   - Read before you write. Inspect the files the task names and anything they import.
+    write_file on an existing file is REFUSED until you have read it. When you rewrite a file,
+    keep every existing function, class and test that the task did not ask you to change —
+    deleting existing tests fails verification automatically.
   - A file that does not exist is NOT a problem: create it with write_file. New projects start
     empty; "no such file" from read_file means "you create it".
   - A failing or erroring test run is NOT a reason to stop: read the error, fix the code or the

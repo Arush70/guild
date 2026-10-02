@@ -146,9 +146,12 @@ class Guild:
     def _ctx(self, role: Role) -> ToolContext:
         mutating = {"write_file", "edit_file", "run_command"}
         readonly = not any(t in mutating for t in role.tools) or role.name in {"critic", "security", "verifier"}
-        return ToolContext(root=self.root, ignore=self.cfg.ignore, test_command=self.cfg.test_command,
-                           lint_command=self.cfg.lint_command, sandbox=self.sandbox,
-                           write_allowlist=role.write_allowlist, readonly=readonly)
+        ctx = ToolContext(root=self.root, ignore=self.cfg.ignore, test_command=self.cfg.test_command,
+                          lint_command=self.cfg.lint_command, sandbox=self.sandbox,
+                          write_allowlist=role.write_allowlist, readonly=readonly)
+        # files created/edited earlier in the same task don't need re-reading before overwrite
+        ctx.files_read = set(getattr(self, "_task_written", ()))
+        return ctx
 
     def agent(self, name: str, *, escalate: bool = False) -> Agent:
         role = self.role(name)
@@ -331,6 +334,17 @@ class Guild:
     _PYTEST_RX = re.compile(r"(\d+) passed|(\d+) failed|(\d+) error", re.I)
     _FAIL_LINE_RX = re.compile(r"^(FAILED|ERROR) (.+?)(?: - (.*))?$", re.M)
 
+    def collect_tests(self) -> set[str] | None:
+        """Set of pytest node ids (file::test). None when the test runner isn't pytest."""
+        cmd = self.cfg.test_command
+        if "pytest" not in cmd:
+            return None
+        # exactly one -q: with two, pytest prints per-file counts instead of node ids
+        base = " ".join(t for t in cmd.split() if t not in ("-q", "--quiet", "-qq"))
+        res = self.sandbox.run(f"{base} --collect-only -q", timeout=300)
+        ids = {ln.strip() for ln in res.output.splitlines() if "::" in ln and not ln.startswith(("=", "ERROR", "E "))}
+        return ids
+
     def verify(self) -> dict:
         """Run the project's test command directly (no model involved) and report facts."""
         cmd = self.cfg.test_command
@@ -397,6 +411,14 @@ class Guild:
                       + f"Done when: {task.done_when}")
         project_ctx = {"Project goal": plan.goal, "Project": self.project_summary()}
 
+        self._task_written: set[str] = set()
+        # Baseline: which tests exist before the engineer touches anything. Tests that vanish
+        # afterwards mean existing behaviour was deleted, whatever the new tests say.
+        baseline_tests = self.collect_tests() if "verifier" in enabled else None
+        baseline_count = None
+        if "verifier" in enabled and baseline_tests is None:
+            baseline_count = self.verify().get("tests_run")
+
         feedback = ""
         verification = critic = security = lead_decision = docs = None
         escalated = False
@@ -429,6 +451,7 @@ class Guild:
                             summary=(eng.data or {}).get("summary", eng.raw[:300]))
             self._commit(f"guild({task.id}) round {rounds}: {task.title}")
 
+            self._task_written |= eng_agent.ctx.files_written
             if eng.data and eng.data.get("status") == "blocked" and not pushed_back_on_block:
                 # Small models block on trivial obstacles (a missing file, a failing test). Push back
                 # once with the facts; only a second "blocked" is taken at face value.
@@ -444,6 +467,7 @@ class Guild:
                       "edit the files, run run_tests, then reply with the final JSON. Use \"blocked\" only if "
                       "a tool call literally fails and you can quote its error.",
                     context_blocks=project_ctx)
+                self._task_written |= eng_agent.ctx.files_written
                 if eng.data and eng.data.get("status") == "done" and not eng_agent.ctx.files_written:
                     eng.data["status"] = "blocked"
                     eng.data["summary"] = "engineer produced no file changes (after push-back)"
@@ -458,7 +482,18 @@ class Guild:
             if "verifier" in enabled:
                 self._phase("verify", task_id=task.id, round=rounds)
                 verification = self.verify()
-                self.trace.emit("verification", round=rounds, **{k: verification.get(k) for k in ("passed", "tests_run", "failures", "exit_code")})
+                removed: list[str] = []
+                if baseline_tests:
+                    now = self.collect_tests() or set()
+                    removed = sorted(baseline_tests - now)
+                elif baseline_count is not None and verification.get("tests_run", 0) < baseline_count:
+                    removed = [f"test count dropped from {baseline_count} to {verification.get('tests_run')}"]
+                if removed:
+                    verification["passed"] = False
+                    verification["removed_tests"] = removed
+                    verification["failures"] = list(verification.get("failures", [])) + [
+                        "EXISTING TESTS REMOVED (you must keep all pre-existing code and tests): " + ", ".join(removed[:8])]
+                self.trace.emit("verification", round=rounds, **{k: verification.get(k) for k in ("passed", "tests_run", "failures", "exit_code", "removed_tests")})
                 self.report("info", f"verification: {'PASS' if verification.get('passed') else 'FAIL'} ({verification.get('tests_run')} tests)")
 
             diff = self._diff_text(base_ref)
