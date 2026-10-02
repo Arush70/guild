@@ -107,7 +107,11 @@ def _ram_gb() -> float | None:
     if platform.system() == "Darwin":
         try:
             out = subprocess.run(
-                ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=3
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=3,
             ).stdout
             return round(int(out.strip()) / 2**30, 1)
         except Exception:
@@ -123,7 +127,8 @@ def _nvidia() -> tuple[str | None, float | None]:
             subprocess.run(
                 ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
                 capture_output=True,
-                text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
             )
             .stdout.strip()
