@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,13 +7,13 @@ name = "guild-ai"
 version = "0.2.0"
 description = "A budget-aware multi-agent coding team: lead, engineer, critic, verifier, security, docs — configured per profile (free / lite / pro)."
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "Arush Kumar Vishwakarma" }]
 keywords = ["llm", "agents", "coding-assistant", "multi-agent", "ollama", "openai", "anthropic"]
 classifiers = [
   "Development Status :: 3 - Alpha",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Topic :: Software Development",
 ]
