@@ -12,6 +12,25 @@
 - docs: TROUBLESHOOTING.md, ADDING_A_ROLE.md.
 
 ## Unreleased
+- Audit (2026-10-02): ruff rule set pinned in `pyproject.toml` + `ruff format` adopted (CI checks
+  both) — newer ruff versions had been reporting ~90 "findings" that were just default-rule drift.
+- Windows: subprocess output decoded as UTF-8 (cp1252 crashed on `—`); test/command timeouts
+  kill the whole process tree (`taskkill /T`) instead of hanging guild.
+- Dashboard: `merge` no longer corrupts `plan.json` for later loads (`Task.merged`; unknown keys
+  ignored); switching project keeps the live event stream; double-click cannot start two jobs.
+- Branch safety: `__pycache__`/`.pytest_cache`/`*.pyc` are never committed; rejected tasks return
+  to the branch they started from; accepted tasks stay on theirs so dependent tasks stack; merge
+  refuses a self-merge and reports git errors; no branching on a repo without commits (`guild init`
+  now makes the initial commit and gitignores caches).
+- Reviews: a critic/security reply that never parsed is "request_changes", not silent approval.
+- Read-only roles (critic, security, verifier, assistant, performance) can only run an allowlist of
+  inspection commands (`Role.readonly`); the old deny-regex let `echo x > f` / `sed -i` through.
+- Small-model tolerance: null/number/object values in string fields are coerced; `<think>` blocks
+  are stripped before JSON extraction and the last balanced object wins; dangling `depends_on` ids
+  are dropped; `_norm` no longer strips the dot off `.github/...` paths.
+- Local model endpoints get a 15-minute timeout (`GUILD_MODEL_TIMEOUT`); rich markup in model text
+  cannot crash the CLI; docs role may edit root-level `*.md`.
+- Packaging: SPDX licence metadata; wheel verified in a clean venv (`guild init -y`, `guild doctor`).
 - TASK-002: `write_file` on an existing, unread file is refused (read first, then edit or rewrite keeping everything). Files written earlier in the same task are exempt.
 - Verification now collects pytest node ids before the engineer starts; any pre-existing test that disappears fails verification with its name (non-pytest runners: test count must not drop).
 - Project docs as context: PRD/ARCHITECTURE/RULES/TASKS/MEMORY/DECISIONS/DESIGN (also CLAUDE.md, .cursorrules) are read into every role's context when present; `guild init --docs` scaffolds them; Docs role keeps MEMORY/TASKS current.
