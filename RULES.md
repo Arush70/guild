@@ -13,8 +13,9 @@ These rules apply to any AI (Claude Code, guild's own agents) or human changing 
 
 ## General
 
-- Python 3.10+. `ruff check src tests` must pass (line length 100; E702 allowed only in
-  `cli.py`). `pytest -q` must pass.
+- Python 3.10+. `ruff check src tests` and `ruff format --check src tests` must pass (rule
+  set pinned in `pyproject.toml`; line length 100; E702 allowed only in `cli.py`; tests may
+  exceed 100 columns for literal fixtures). `pytest -q` must pass.
 - Keep functions small; do not duplicate logic; do not touch unrelated files.
 - No new dependencies without a line in `docs/DECISIONS.md`.
 - Keep the dashboard a single `index.html` with no build step and no external scripts.

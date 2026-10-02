@@ -52,13 +52,14 @@ src/guild/
   data/roles/*.yaml   lead engineer critic security docs researcher performance kaggle assistant(chat, prose)
   data/templates/*.md PRD/ARCHITECTURE/RULES/TASKS/MEMORY/DECISIONS scaffolds for `guild init --docs`
   data/profiles/*.yaml free lite pro (guild init writes a machine-specific override into .guild/profiles/)
-tests/                61 tests; FakeProvider in conftest.py scripts model replies, no API calls;
+tests/                74 tests; FakeProvider in conftest.py scripts model replies, no API calls;
                       test_robustness.py (schemas/repair/streaming), test_hardware.py (init wizard)
 ```
 
 ## Conventions
 
-- Python 3.10+, `ruff check src tests` must pass (line length 100; E702 ignored in cli.py only).
+- Python 3.10+, `ruff check src tests && ruff format --check src tests` must pass (rule set is
+  pinned in pyproject.toml so results don't drift between ruff versions; line length 100).
 - `pytest` must pass. Tests never call real APIs — use `FakeProvider` (scripted turns per role)
   or a tiny custom provider class registered with `router.register_provider("fake", obj)`.
 - Keep the safety model intact: tools resolve inside the project root and refuse `..`;
@@ -91,17 +92,17 @@ Dev environment: repo at `C:\Machine Learning projects\guild`, venv at `.venv`
 (`.venv\Scripts\Activate.ps1`), installed with `pip install -e ".[dev]"`. Demo project for
 manual testing at `C:\Machine Learning projects\demo` (git branch is `master`).
 
-## State of the project (2026-09-27, v0.2.0)
+## State of the project (2026-10-02, v0.2.x)
 
-Works end to end with a scripted fake provider (49 tests) and verified in a headless browser
-(streaming, plan check, diff modal, trace viewer, merge). Has been run for real against Ollama
-`qwen2.5-coder:7b` a few times; everything since (deterministic verification, text tool-call
-fallback, output validation/repair, streaming, init wizard) has NOT yet been confirmed on a
-real model run. That is the open milestone.
+Works end to end with a scripted fake provider (74 tests) and verified in a headless browser
+(streaming, plan check, diff modal, trace viewer, merge). One real run on the free profile
+(Ollama `qwen2.5-coder:7b`) ACCEPTED the demo task (TASK-001) but overwrote existing code;
+the read-before-write / removed-tests guards (TASK-002) and a full code audit (see
+CHANGELOG "Unreleased") landed afterwards and have NOT yet been confirmed on a real run.
 
-First thing to do: run the demo (`cd ..\demo && guild ui`, goal "Add a multiply(a, b) function
-to app.py and a test_multiply test in test_app.py"), read `.guild/runs/<latest>/trace.jsonl`,
-and fix whatever the 7b model trips on. Expect prompt/parsing tweaks, not architecture changes.
+First thing to do: re-run the demo (`cd ..\Demo && guild ui`, goal "Add a multiply(a, b)
+function to app.py and a test_multiply test in test_app.py") with the guards in place, read
+`.guild/runs/<latest>/trace.jsonl`, then TASK-003 (calculator plan, run all).
 
 ## Roadmap (owner's priorities)
 
@@ -127,7 +128,7 @@ performance roles, `guild watch`, GitHub Action, troubleshooting docs.
 ```
 .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
-ruff check src tests && pytest -q
+ruff check src tests && ruff format --check src tests && pytest -q
 guild --help
 guild doctor -C ..\demo
 guild plan "..." -C ..\demo
