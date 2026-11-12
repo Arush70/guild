@@ -59,6 +59,8 @@ review the diff → commit → tick here and update `docs/MEMORY.md`.
 - [ ] TASK-031 Pair/chat context: `@path` attaches files; keep tool results across turns (today
       only the text of earlier turns is replayed); compact long histories with the cheap slot.
 - [ ] TASK-034 Slash commands (`.guild/commands/<name>.md`) and write hooks.
+- [x] TASK-044 Untangle refactor of the whole codebase (2026-11-12, `docs/UNTANGLE.md`,
+      ADR-017). Follow-up for the owner: run the suites on Windows and one real-model task.
 - [ ] TASK-043 Publish the extension (VS Code Marketplace / Open VSX) once TASK-012 is done;
       the `arush70` publisher id in `vscode-extension/package.json` must exist there first.
 

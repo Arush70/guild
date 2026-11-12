@@ -7,6 +7,8 @@ import os
 
 from .base import Completion, Message, NotConfigured, ProviderError, ToolCall, ToolSpec, Usage
 
+KEY_ENV = "ANTHROPIC_API_KEY"
+
 
 def _to_anthropic(messages: list[Message], flatten_tools: bool = False) -> tuple[str, list[dict]]:
     """Translate to the Messages API shape.
@@ -69,8 +71,8 @@ class AnthropicProvider:
 
     def client(self, model: str):
         if self._client is None:
-            if not os.environ.get("ANTHROPIC_API_KEY"):
-                raise NotConfigured(model, "ANTHROPIC_API_KEY not set")
+            if not os.environ.get(KEY_ENV):
+                raise NotConfigured(model, f"{KEY_ENV} not set")
             from anthropic import Anthropic
 
             self._client = Anthropic(timeout=300.0, max_retries=1)

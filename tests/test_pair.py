@@ -10,12 +10,14 @@ import pytest
 from typer.testing import CliRunner
 
 from guild.config import ProjectConfig, save_project_config
-from guild.providers import Cancelled
+from guild.errors import Cancelled
+from guild.plan import Plan, Task
 from guild.providers.base import Completion, Message, Usage
 from guild.sandbox import LocalSandbox
-from guild.tools.registry import ToolContext, approval_request, dispatch
+from guild.tools import ToolContext, dispatch
+from guild.tools.registry import approval_request
 from guild.trace import read_trace
-from guild.workflow import Guild, Plan, Task
+from guild.workflow import Guild, PairSession
 from tests.conftest import FakeProvider
 
 NEW_FILE = ("write_file", {"path": "hello.py", "content": "print('hi')\n"})
@@ -118,7 +120,9 @@ def test_pair_ask_mode_applies_approved_changes_in_the_working_tree(project, cfg
     g = _guild(project, cfg, profile, _pair_script(NEW_FILE))
     asked = []
     try:
-        res = g.pair("make hello.py", approver=lambda r: (asked.append(r), (True, ""))[1])
+        res = g.pair(
+            "make hello.py", session=PairSession(), ask=lambda r: (asked.append(r), (True, ""))[1]
+        )
         events = read_trace(g.trace.path)
     finally:
         g.close()
@@ -145,7 +149,7 @@ def test_pair_ask_mode_applies_approved_changes_in_the_working_tree(project, cfg
 def test_pair_without_an_approver_fails_closed(project, cfg, profile):
     g = _guild(project, cfg, profile, _pair_script(NEW_FILE, final="could not"))
     try:
-        res = g.pair("make hello.py")
+        res = g.pair("make hello.py", session=PairSession())
     finally:
         g.close()
     assert not (project / "hello.py").exists() and res.data["files_changed"] == []
@@ -156,7 +160,9 @@ def test_pair_auto_edits_mode_only_asks_for_commands(project, cfg, profile):
     g = _guild(project, cfg, profile, _pair_script(NEW_FILE, cmd))
     asked = []
     try:
-        g.pair("go", mode="auto-edits", approver=lambda r: (asked.append(r), (True, ""))[1])
+        g.pair(
+            "go", session=PairSession("auto-edits"), ask=lambda r: (asked.append(r), (True, ""))[1]
+        )
     finally:
         g.close()
     assert (project / "hello.py").exists() and (project / "ran").exists()
@@ -167,9 +173,9 @@ def test_pair_plan_mode_is_read_only(project, cfg, profile):
     cmd = ("run_command", {"command": "python -c \"open('ran','w')\""})
     g = _guild(project, cfg, profile, _pair_script(NEW_FILE, cmd, final="Plan: 1. …"))
     try:
-        res = g.pair("how would you do it?", mode="plan", approver=lambda r: (True, ""))
+        res = g.pair("how would you do it?", session=PairSession("plan"), ask=lambda r: (True, ""))
         with pytest.raises(ValueError):
-            g.pair("x", mode="yolo")
+            PairSession("yolo")
     finally:
         g.close()
     assert not (project / "hello.py").exists() and not (project / "ran").exists()
@@ -188,7 +194,9 @@ def test_pair_keeps_the_safety_model(project, cfg, profile):
     g = _guild(project, cfg, profile, _pair_script(*turns, final="nope"))
     asked = []
     try:
-        res = g.pair("do bad things", approver=lambda r: (asked.append(r), (True, ""))[1])
+        res = g.pair(
+            "do bad things", session=PairSession(), ask=lambda r: (asked.append(r), (True, ""))[1]
+        )
     finally:
         g.close()
     assert asked == []
@@ -205,7 +213,7 @@ def test_cancel_stops_before_the_next_model_call(project, cfg, profile):
     class CancelsItself:
         calls = 0
 
-        def complete(self, model_name, messages, tools, max_tokens, temperature):
+        def complete(self, model_name, messages, tools, max_tokens, temperature, on_token=None):
             self.calls += 1
             g.cancel()
             return Completion(
@@ -223,8 +231,7 @@ def test_cancel_stops_before_the_next_model_call(project, cfg, profile):
 
 
 def test_cancel_kills_a_running_command(project):
-    sb = LocalSandbox(project)
-    sb.cancel = threading.Event()
+    sb = LocalSandbox(project, threading.Event())
     threading.Timer(0.6, sb.cancel.set).start()
     t0 = time.time()
     with pytest.raises(Cancelled):
@@ -246,22 +253,15 @@ from guild.ui import server  # noqa: E402
 
 
 @pytest.fixture
-def make_ui(project, cfg, profile, monkeypatch):
+def make_ui(project, cfg, profile, use_models):
     import yaml
-
-    from guild.providers import router as router_mod
 
     save_project_config(project, cfg)
     (project / ".guild" / "profiles").mkdir(parents=True, exist_ok=True)
     (project / ".guild" / "profiles" / "test.yaml").write_text(yaml.safe_dump(profile.model_dump()))
-    orig = router_mod.Router._provider_for
 
     def make(fake):
-        monkeypatch.setattr(
-            router_mod.Router,
-            "_provider_for",
-            lambda self, prefix: fake if prefix == "fake" else orig(self, prefix),
-        )
+        use_models(fake)
         return TestClient(server.create_app(project), base_url="http://127.0.0.1:7331")
 
     return make
@@ -366,22 +366,17 @@ def test_chat_history_survives_a_server_restart(make_ui, project):
 # ------------------------------------------------------------------ CLI
 
 
-def test_cli_pair_session(project, cfg, profile, monkeypatch):
+def test_cli_pair_session(project, cfg, profile, use_models):
     import yaml
 
     from guild.cli import app
-    from guild.providers import router as router_mod
 
     save_project_config(project, cfg)
     (project / ".guild" / "profiles").mkdir(parents=True, exist_ok=True)
     (project / ".guild" / "profiles" / "test.yaml").write_text(yaml.safe_dump(profile.model_dump()))
     second = ("write_file", {"path": "two.py", "content": "x = 2\n"})
-    fake = FakeProvider({"pair": [[NEW_FILE], [second], "First turn done.", "Second turn done."]})
-    orig = router_mod.Router._provider_for
-    monkeypatch.setattr(
-        router_mod.Router,
-        "_provider_for",
-        lambda self, prefix: fake if prefix == "fake" else orig(self, prefix),
+    use_models(
+        FakeProvider({"pair": [[NEW_FILE], [second], "First turn done.", "Second turn done."]})
     )
     # turn 1: approve hello.py (y), decline two.py (n); then switch mode, ask again, exit
     stdin = "y\nn\n/mode plan\nwhat next?\n/exit\n"

@@ -6,6 +6,7 @@ Mistral, and gateways like OmniRoute or LiteLLM. Each is just a base URL + key e
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 
@@ -26,13 +27,20 @@ class Endpoint:
     base_url: str
     key_env: str | None  # None = no key needed (Ollama)
     default_key: str = "none"
+    # Runs on this machine (Ollama, a local gateway): usually no auth, so the key is sent when
+    # set but never required, and replies can take many minutes on a laptop GPU.
+    local: bool = False
 
+    @property
+    def key_optional(self) -> bool:
+        return self.key_env is None or self.local
+
+
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
 
 ENDPOINTS: dict[str, Endpoint] = {
     "openai": Endpoint("https://api.openai.com/v1", "OPENAI_API_KEY"),
-    "ollama": Endpoint(
-        os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/") + "/v1", None, "ollama"
-    ),
+    "ollama": Endpoint(OLLAMA_HOST + "/v1", None, "ollama", local=True),
     "groq": Endpoint("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
     "gemini": Endpoint("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"),
     "deepseek": Endpoint("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY"),
@@ -41,17 +49,17 @@ ENDPOINTS: dict[str, Endpoint] = {
     "omniroute": Endpoint(
         os.environ.get("OMNIROUTE_HOST", "http://localhost:20128").rstrip("/") + "/v1",
         "OMNIROUTE_API_KEY",
-        "none",
+        local=True,
     ),
     "litellm": Endpoint(
         os.environ.get("LITELLM_HOST", "http://localhost:4000").rstrip("/") + "/v1",
         "LITELLM_API_KEY",
-        "none",
+        local=True,
     ),
     "custom": Endpoint(
         os.environ.get("CUSTOM_OPENAI_BASE_URL", "http://localhost:8000/v1"),
         "CUSTOM_OPENAI_API_KEY",
-        "none",
+        local=True,
     ),
 }
 
@@ -70,7 +78,7 @@ def _to_openai_messages(messages: list[Message]) -> list[dict]:
                         {
                             "id": tc.id,
                             "type": "function",
-                            "function": {"name": tc.name, "arguments": _dumps(tc.arguments)},
+                            "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
                         }
                         for tc in m.tool_calls
                     ],
@@ -79,12 +87,6 @@ def _to_openai_messages(messages: list[Message]) -> list[dict]:
         else:
             out.append({"role": m.role, "content": m.content})
     return out
-
-
-def _dumps(d: dict) -> str:
-    import json
-
-    return json.dumps(d)
 
 
 def _to_openai_tools(tools: list[ToolSpec]) -> list[dict]:
@@ -107,14 +109,12 @@ class OpenAICompatProvider:
 
     def _key(self, model: str) -> str:
         ep = self.endpoint
-        if ep.key_env is None:
+        key = os.environ.get(ep.key_env) if ep.key_env else None
+        if key:
+            return key
+        if ep.key_optional:
             return ep.default_key
-        key = os.environ.get(ep.key_env)
-        if not key:
-            if ep.default_key != "none" or self.provider in {"omniroute", "litellm", "custom"}:
-                return ep.default_key
-            raise NotConfigured(model, f"{ep.key_env} not set")
-        return key
+        raise NotConfigured(model, f"{ep.key_env} not set")
 
     def client(self, model: str):
         if self._client is None:
@@ -122,11 +122,12 @@ class OpenAICompatProvider:
 
             # Local servers (Ollama on a laptop GPU) can take many minutes for a long reply or
             # a deepseek-r1 "think" block; the non-streaming CLI path must not give up at 3 min.
-            local = self.provider in {"ollama", "omniroute", "litellm", "custom"}
             self._client = OpenAI(
                 base_url=self.endpoint.base_url,
                 api_key=self._key(model),
-                timeout=float(os.environ.get("GUILD_MODEL_TIMEOUT", 900 if local else 180)),
+                timeout=float(
+                    os.environ.get("GUILD_MODEL_TIMEOUT", 900 if self.endpoint.local else 180)
+                ),
                 max_retries=1,
             )
         return self._client

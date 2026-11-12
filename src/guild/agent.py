@@ -9,9 +9,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .config import Role
-from .providers import Cancelled, Message, Router, ToolCall
+from .errors import Cancelled
+from .providers import Message, Router, ToolCall
 from .schemas import validate
-from .tools import ToolContext, dispatch, specs_for
+from .tools import ToolContext, ToolResult, dispatch, refusal, specs_for
 from .trace import Trace
 
 
@@ -28,6 +29,10 @@ class AgentResult:
     @property
     def ok(self) -> bool:
         return self.data is not None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Everything but the message history, which is large and already in the trace."""
+        return {k: v for k, v in self.__dict__.items() if k != "history"}
 
 
 _JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
@@ -116,7 +121,11 @@ def extract_text_tool_calls(text: str, allowed: set[str]) -> list[ToolCall]:
     return calls
 
 
+_OUT_OF_BUDGET = "Tool budget exhausted. Reply now with your final JSON."
+
+
 class Agent:
+    MAX_TOKENS = 8192
     MAX_REPAIRS = 2  # extra model calls allowed to fix a malformed / invalid final reply
 
     def __init__(
@@ -127,8 +136,6 @@ class Agent:
         trace: Trace,
         *,
         escalate: bool = False,
-        max_tokens: int = 8192,
-        temperature: float = 0.2,
         on_token: Callable[[str, str], None] | None = None,
         max_tool_calls: int | None = None,
     ):
@@ -138,19 +145,17 @@ class Agent:
         self.trace = trace
         self.escalate = escalate and role.escalation_slot is not None
         self.slot = role.escalation_slot if self.escalate else role.slot
-        self.max_tokens = max_tokens
-        self.temperature = temperature
-        self.on_token = on_token  # (role, text_chunk) -> None; used for live streaming
+        self.on_token = on_token
         # tool budget for one run(); a profile can raise/lower it (limits.max_tool_calls_per_task)
         self.max_tool_calls = role.max_tool_calls if max_tool_calls is None else max_tool_calls
 
-    def _dispatch(self, name: str, args: dict[str, Any]) -> str:
+    def _dispatch(self, name: str, args: dict[str, Any]) -> ToolResult:
         """Run a tool, but only one this role was given. Models can emit a call to any name
         (hallucinated, or copied from a file they read); the registry knows them all."""
         if name not in self.role.tools:
             self.ctx.tool_calls_made += 1
-            return (
-                f"refused: tool '{name}' is not available to this role "
+            return refusal(
+                f"tool '{name}' is not available to this role "
                 f"(available: {', '.join(self.role.tools) or 'none'})"
             )
         if self._cancelled():
@@ -158,10 +163,20 @@ class Agent:
         return dispatch(self.ctx, name, args)
 
     def _cancelled(self) -> bool:
-        ev = getattr(self.router, "cancel", None)
-        return ev is not None and ev.is_set()
+        return self.router.cancel.is_set()
 
-    def _complete(self, messages: list[Message], tools, *, temperature: float | None = None):
+    def _run_tool(self, call: ToolCall) -> str:
+        result = self._dispatch(call.name, call.arguments)
+        self.trace.tool_call(
+            role=self.role.name,
+            tool=call.name,
+            args=call.arguments,
+            result_preview=result,
+            ok=result.ok,
+        )
+        return result
+
+    def _complete(self, messages: list[Message], tools, *, temperature: float = 0.2):
         def stream(chunk: str) -> None:
             if self._cancelled():  # stop a long generation mid-stream, not only between calls
                 raise Cancelled()
@@ -172,20 +187,19 @@ class Agent:
             self.slot,
             messages,
             tools,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature if temperature is None else temperature,
+            max_tokens=self.MAX_TOKENS,
+            temperature=temperature,
             role=self.role.name,
             on_token=cb,
         )
-        rec = self.router.tracker.calls[-1]
         self.trace.model_call(
             role=self.role.name,
             slot=self.slot,
             model=comp.model,
             input_tokens=comp.usage.input_tokens,
             output_tokens=comp.usage.output_tokens,
-            usd=rec.usd,
-            latency_s=rec.latency_s,
+            usd=comp.usd,
+            latency_s=comp.latency_s,
             n_tool_calls=len(comp.message.tool_calls),
             stop_reason=comp.stop_reason,
             content_preview=comp.message.content,
@@ -206,7 +220,7 @@ class Agent:
             ctx_text = "\n\n".join(f"### {k}\n{v}" for k, v in context_blocks.items() if v)
             messages.append(Message("user", f"Context:\n\n{ctx_text}"))
             messages.append(Message("assistant", "Understood. Waiting for the task."))
-        for m in prior or []:  # earlier conversation turns (chat)
+        for m in prior or []:
             if m.role in ("user", "assistant") and not m.tool_calls:
                 messages.append(Message(m.role, m.content))
         messages.append(Message("user", user_prompt))
@@ -223,7 +237,6 @@ class Agent:
             last_text = comp.message.content or ""
 
             if not comp.message.tool_calls and tools:
-                # fallback: tool call written as plain text
                 text_calls = extract_text_tool_calls(last_text, {t.name for t in tools})
                 if text_calls:
                     self.trace.emit(
@@ -231,20 +244,7 @@ class Agent:
                         role=self.role.name,
                         msg=f"model wrote {len(text_calls)} tool call(s) as text; executing them",
                     )
-                    results = []
-                    for tc in text_calls:
-                        result = self._dispatch(tc.name, tc.arguments)
-                        ok = not result.startswith(
-                            ("refused:", "unknown tool:", "tool error", "bad arguments")
-                        )
-                        self.trace.tool_call(
-                            role=self.role.name,
-                            tool=tc.name,
-                            args=tc.arguments,
-                            result_preview=result,
-                            ok=ok,
-                        )
-                        results.append(f"[{tc.name}] {result}")
+                    results = [f"[{tc.name}] {self._run_tool(tc)}" for tc in text_calls]
                     messages.append(
                         Message(
                             "user",
@@ -255,11 +255,7 @@ class Agent:
                         )
                     )
                     if self.ctx.tool_calls_made >= self.max_tool_calls:
-                        messages.append(
-                            Message(
-                                "user", "Tool budget exhausted. Reply now with your final JSON."
-                            )
-                        )
+                        messages.append(Message("user", _OUT_OF_BUDGET))
                     continue
 
             if not comp.message.tool_calls:
@@ -272,24 +268,13 @@ class Agent:
                     messages.append(
                         Message("tool", "tool budget exhausted", tool_call_id=tc.id, name=tc.name)
                     )
-                messages.append(
-                    Message("user", "Tool budget exhausted. Reply now with your final JSON.")
-                )
+                messages.append(Message("user", _OUT_OF_BUDGET))
                 continue
 
             for tc in comp.message.tool_calls:
-                result = self._dispatch(tc.name, tc.arguments)
-                ok = not result.startswith(
-                    ("refused:", "unknown tool:", "tool error", "bad arguments")
+                messages.append(
+                    Message("tool", self._run_tool(tc), tool_call_id=tc.id, name=tc.name)
                 )
-                self.trace.tool_call(
-                    role=self.role.name,
-                    tool=tc.name,
-                    args=tc.arguments,
-                    result_preview=result,
-                    ok=ok,
-                )
-                messages.append(Message("tool", result, tool_call_id=tc.id, name=tc.name))
 
         if not expect_json:
             return AgentResult(
@@ -323,7 +308,7 @@ class Agent:
             )
             comp = self._complete(messages, None, temperature=0.0)
             messages.append(comp.message)
-            last_text = comp.message.content
+            last_text = comp.message.content or ""
             data, error = self._parse_and_validate(last_text, job)
 
         return AgentResult(

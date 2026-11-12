@@ -4,6 +4,7 @@ tracks tokens and estimated cost, and enforces the per-run USD cap.
 
 from __future__ import annotations
 
+import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
@@ -11,8 +12,9 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from ..config import Profile
+from ..errors import Cancelled
 from .anthropic_provider import AnthropicProvider
-from .base import Cancelled, Completion, Message, NotConfigured, ProviderError, ToolSpec, Usage
+from .base import Completion, Message, NotConfigured, ProviderError, ToolSpec, Usage
 from .openai_compat import ENDPOINTS, OpenAICompatProvider
 
 OnToken = Callable[[str], None]
@@ -123,15 +125,6 @@ class CostTracker:
             u = u + c.usage
         return u
 
-    def by_model(self) -> dict[str, tuple[Usage, float, int]]:
-        agg: dict[str, list] = defaultdict(lambda: [Usage(), 0.0, 0])
-        for c in self.calls:
-            a = agg[c.model]
-            a[0] = a[0] + c.usage
-            a[1] += c.usd
-            a[2] += 1
-        return {k: (v[0], v[1], v[2]) for k, v in agg.items()}
-
     def by_role(self) -> dict[str, tuple[Usage, float, int]]:
         agg: dict[str, list] = defaultdict(lambda: [Usage(), 0.0, 0])
         for c in self.calls:
@@ -149,18 +142,18 @@ class Router:
         self,
         profile: Profile,
         tracker: CostTracker | None = None,
-        max_usd: float | None = None,
         on_fallback: Callable[[str, str, str], None] | None = None,
+        cancel: threading.Event | None = None,
     ):
         self.profile = profile
         self.tracker = tracker or CostTracker()
-        self.max_usd = profile.limits.max_usd_per_run if max_usd is None else max_usd
+        self.max_usd = profile.limits.max_usd_per_run
         self.on_fallback = on_fallback
+        self.cancel = cancel or threading.Event()  # set to stop before the next model call
         self._providers: dict[str, Provider] = {}
         self._dead: set[str] = set()  # models that failed non-retryably this run
         self._sticky: dict[str, str] = {}  # slot -> last model that worked
         self._overrides: dict[str, Provider] = {}
-        self.cancel = None  # threading.Event set by Guild; checked before every model call
 
     # -- test hook ---------------------------------------------------------
     def register_provider(self, prefix: str, provider: Provider) -> None:
@@ -196,7 +189,7 @@ class Router:
         role: str = "",
         on_token: OnToken | None = None,
     ) -> Completion:
-        if self.cancel is not None and self.cancel.is_set():
+        if self.cancel.is_set():
             raise Cancelled()
         if self.max_usd is not None and self.max_usd > 0 and self.tracker.total_usd >= self.max_usd:
             raise BudgetExceeded(
@@ -217,8 +210,8 @@ class Router:
                 and self.max_usd == 0
                 and any(self.tracker.prices.get(full, (0.0, 0.0)))
             ):
-                # free profile: decide BEFORE the request. Checking afterwards (as this did)
-                # means the call was already made and billed, and its answer thrown away.
+                # free profile: decide before the request. Afterwards is too late: the call
+                # has been made and billed.
                 self._dead.add(full)
                 errors.append(
                     ProviderError(
@@ -238,14 +231,9 @@ class Router:
 
             t0 = time.time()
             try:
-                try:
-                    comp = provider.complete(
-                        model_name, messages, tools, max_tokens, temperature, on_token=on_token
-                    )
-                except TypeError as te:
-                    if "on_token" not in str(te):
-                        raise
-                    comp = provider.complete(model_name, messages, tools, max_tokens, temperature)
+                comp = provider.complete(
+                    model_name, messages, tools, max_tokens, temperature, on_token=on_token
+                )
             except NotConfigured as e:
                 errors.append(e)
                 self._dead.add(full)
@@ -258,16 +246,12 @@ class Router:
                     self.on_fallback(slot, full, e.reason)
                 continue
 
-            usd = self.tracker.price(comp.model, comp.usage)
-            if self.max_usd is not None and self.max_usd == 0 and usd > 0:
-                # free profile: refuse to spend even if a key happens to be set
-                self._dead.add(full)
-                errors.append(
-                    ProviderError(full, "would cost money but profile cap is $0", retryable=False)
-                )
-                continue
+            comp.usd = self.tracker.price(comp.model, comp.usage)
+            comp.latency_s = time.time() - t0
             self.tracker.record(
-                CallRecord(time.time(), slot, comp.model, comp.usage, usd, time.time() - t0, role)
+                CallRecord(
+                    time.time(), slot, comp.model, comp.usage, comp.usd, comp.latency_s, role
+                )
             )
             self._sticky[slot] = full
             return comp

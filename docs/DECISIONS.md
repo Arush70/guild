@@ -92,3 +92,12 @@ plan → run → review pipeline, not a replacement. Decisions:
 - Cancel is cooperative (`Cancelled`, a BaseException so no `except Exception` swallows it):
   checked before model calls, mid-stream, between tool calls, while a command runs and while
   an approval is pending. `POST /api/cancel` ends any job; a cancelled task returns to todo.
+
+## ADR-017 One module per reason to change (accepted 2026-11-12)
+The plan, git, verification, `.guild` paths, path scoping and command policy each have one
+module (`plan.py`, `repo.py`, `verify.py`, `paths.py`, `tools/context.py`, `tools/policy.py`).
+`workflow.py` only orchestrates; the CLI and the dashboard server call those modules and never
+a private `Guild` method. Results that cross a module boundary are objects (`Verification`,
+`ToolResult`, `TaskOutcome.reviews`), not dicts or text to be searched. New code follows the
+same question: should these pieces change together? The reasoning for each move is in
+`docs/UNTANGLE.md`.

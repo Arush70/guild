@@ -47,17 +47,25 @@ throttled `token` events for streaming.
 src/guild/
   cli.py          commands; init wizard (hardware → profile), doctor, plan, run, review, ask,
                   cost, roles, watch, ui
-  workflow.py     Guild: plan, revise_plan, run_task/_run_task, run_tasks, verify, chat, ask,
-                  branch helpers (default_branch, branch_diff, merge_branch, discard_branch)
+  workflow.py     Guild: plan, revise_plan, run_task/_run_task, run_tasks, chat, pair, ask
+  plan.py         Task, Plan, PlanStore: the only code that reads or changes plan.json
+  repo.py         Repo: every git command (diff, commit, merge, discard); TaskBranch: one
+                  task's branch from start to leave
+  verify.py       Verifier: tests + lint → Verification; removed-test detection
+  paths.py        ProjectPaths (.guild layout), protected and cache directory names
+  projectdocs.py  project documents read for context + init templates
   agent.py        Agent.run: system + context + prior + prompt → tool loop → parse → validate
                   → repair (≤2). extract_json, extract_text_tool_calls.
   schemas.py      output contracts per role/job (PlanOutput, EngineerOutput, ReviewOutput …)
   config.py       Profile / Role / ProjectConfig; .guild/ overrides beat package data
   hardware.py     detect(); recommend_local(); build_profile(); detect_test_command()
   providers/      base types; openai_compat (+streaming); anthropic (+streaming);
-                  router (fallback chain, sticky last-good, cost cap, CostTracker)
-  tools/registry  @tool functions with JSON schemas; ToolContext enforces root scoping,
-                  read-only roles, write allowlists
+                  router (fallback chain, sticky last-good, cost cap, CostTracker);
+                  status (which models of a profile can run now)
+  tools/registry  @tool functions with JSON schemas; dispatch returns a ToolResult
+  tools/context   Workspace (root scoping, ignore rules); ToolContext adds a role's
+                  permissions (read-only, write allowlist, approver)
+  tools/policy    read-only command allowlist, secret files, blocked URLs
   sandbox.py      LocalSandbox / DockerSandbox; secret env vars stripped
   trace.py        JSONL writer/reader
   ui/server.py    FastAPI app, _State (switchable root), Hub (jobs + SSE + token batching)

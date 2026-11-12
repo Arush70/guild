@@ -28,13 +28,10 @@
     for (const h of items) addMessage(h.role === 'user' ? 'user' : (h.model ? 'assistant · ' + h.model : 'assistant'), h.content, h.role);
   }
 
-  function addLog(text) {
+  function addLog({ text, cls }) {
     const stick = atBottom(log);
     const line = document.createElement('div'); line.textContent = text;
-    if (/ ✖ /.test(text) || /FAIL/.test(text)) line.className = 'bad';
-    else if (/ ✔ /.test(text) || /PASS/.test(text)) line.className = 'ok';
-    else if (/ ▶ /.test(text)) line.className = 'phase';
-    else if (/ ! /.test(text)) line.className = 'warn';
+    if (cls) line.className = cls;
     log.append(line);
     while (log.childElementCount > 1500) log.firstElementChild.remove();
     scroll(log, stick);
@@ -106,7 +103,6 @@
       case 'liveEnd': setLive('', ''); break;
       case 'status': busy = m.busy; ready = m.ready; status.textContent = m.text; status.classList.toggle('busy', m.busy); update(); if (!m.busy) setLive('', ''); break;
       case 'tab': show(m.tab); break;
-      case 'clearLog': log.textContent = ''; break;
       case 'approval': addApproval(m.request); break;
       case 'approvalDone': { const c = document.getElementById('ap-' + m.id); if (c) c.remove(); break; }
     }

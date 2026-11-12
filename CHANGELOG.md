@@ -120,3 +120,9 @@
   Ctrl+C in `guild pair`. Stops mid-generation, between tool calls, kills a running command.
 - Chat history persists across restarts (`.guild/chat.jsonl`).
 - VS Code extension 0.2.0: pair modes in the chat view, approvals, real Stop.
+- Untangle refactor (2026-11-12, `docs/UNTANGLE.md`): no intended behaviour change. New modules
+  `plan.py`, `repo.py`, `verify.py`, `paths.py`, `projectdocs.py`, `errors.py`,
+  `providers/status.py`, `tools/context.py`, `tools/policy.py`; `run_tasks` is the only task
+  loop (the CLI uses it); the dashboard server works on `Plan`/`Repo` objects, no longer on raw
+  dicts or a half-constructed `Guild`. The few visible differences are listed in that file
+  ("What still looks different"). 229 tests.

@@ -25,7 +25,7 @@ class FakeProvider:
         self.calls: list[tuple[str, str]] = []
         self._n = 0
 
-    def complete(self, model_name, messages, tools, max_tokens, temperature):
+    def complete(self, model_name, messages, tools, max_tokens, temperature, on_token=None):
         if model_name in self.fail_models:
             raise ProviderError(f"fake/{model_name}", "simulated outage", retryable=True)
         role = _role_of(messages)
@@ -71,6 +71,14 @@ def _role_of(messages: list[Message]) -> str:
     return "unknown"
 
 
+@pytest.fixture(autouse=True)
+def _own_home(tmp_path_factory, monkeypatch):
+    """The dashboard keeps a per-user list of opened projects; tests must not write theirs
+    into the real one."""
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+
 @pytest.fixture
 def profile() -> Profile:
     return Profile(
@@ -112,3 +120,20 @@ def cfg() -> ProjectConfig:
     return ProjectConfig(
         profile="test", test_command="python -m pytest -q -p no:cacheprovider", sandbox="local"
     )
+
+
+@pytest.fixture
+def use_models(monkeypatch):
+    """Route the `fake/…` models of the test profile to a scripted provider, for code that
+    builds its own Guild (the dashboard server, the CLI)."""
+    from guild.providers.router import Router
+
+    real = Router._provider_for
+
+    def install(provider):
+        monkeypatch.setattr(
+            Router, "_provider_for", lambda self, p: provider if p == "fake" else real(self, p)
+        )
+        return provider
+
+    return install

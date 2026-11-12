@@ -13,62 +13,75 @@ function oneLine(s, n = 160) {
     .slice(0, n);
 }
 
-/** One log line for an event from /api/events, or null for events that are not logged. */
+/**
+ * One log line for an event from /api/events: {text, cls}, or null for events that are not
+ * logged. cls says what the line means (phase | ok | bad | warn | '') so a view can colour it
+ * without reading the text back.
+ */
 function eventLine(ev) {
   const t = clock(ev.ts);
+  const line = (text, cls = '') => ({ text: `${t} ${text}`, cls });
   switch (ev.kind) {
     case 'phase':
-      return `${t} ▶ ${ev.phase}${ev.task_id ? ' ' + ev.task_id : ''}${ev.round ? ' (round ' + ev.round + ')' : ''}`;
+      return line(`▶ ${ev.phase}${ev.task_id ? ' ' + ev.task_id : ''}${ev.round ? ' (round ' + ev.round + ')' : ''}`, 'phase');
     case 'model_call':
-      return (
-        `${t}   ${ev.role}: ${ev.model} · ${ev.input_tokens}→${ev.output_tokens} tok · ${ev.latency_s}s` +
-        (ev.usd ? ` · $${ev.usd}` : '') +
-        (ev.n_tool_calls ? ` · ${ev.n_tool_calls} tool call(s)` : '')
+      return line(
+        `  ${ev.role}: ${ev.model} · ${ev.input_tokens}→${ev.output_tokens} tok · ${ev.latency_s}s` +
+          (ev.usd ? ` · $${ev.usd}` : '') +
+          (ev.n_tool_calls ? ` · ${ev.n_tool_calls} tool call(s)` : '')
       );
     case 'tool_call': {
       const args = Object.entries(ev.args || {})
         .map(([k, v]) => `${k}=${oneLine(JSON.stringify(v), 40)}`)
         .join(', ');
-      return `${t}     ${ev.ok ? '·' : '✖'} ${ev.role} ${ev.tool}(${args}) → ${oneLine(ev.result_preview, 100)}`;
+      return line(
+        `    ${ev.ok ? '·' : '✖'} ${ev.role} ${ev.tool}(${args}) → ${oneLine(ev.result_preview, 100)}`,
+        ev.ok ? '' : 'bad'
+      );
     }
     case 'verification':
-      return (
-        `${t}   tests: ${ev.passed ? 'PASS' : 'FAIL'} (${ev.tests_run} run)` +
-        (ev.failures && ev.failures.length ? ' — ' + oneLine(ev.failures.slice(0, 3).join('; '), 200) : '')
+      return line(
+        `  tests: ${ev.passed ? 'PASS' : 'FAIL'} (${ev.tests_run} run)` +
+          (ev.failures && ev.failures.length ? ' — ' + oneLine(ev.failures.slice(0, 3).join('; '), 200) : ''),
+        ev.passed ? 'ok' : 'bad'
       );
     case 'review_input':
-      return `${t}   reviewers see ${ev.diff_chars} chars of diff: ${(ev.files_in_diff || []).join(', ') || '(no files)'}`;
+      return line(`  reviewers see ${ev.diff_chars} chars of diff: ${(ev.files_in_diff || []).join(', ') || '(no files)'}`);
     case 'decision':
-      return `${t}   ${ev.role}: ${ev.decision || ev.status || ''} ${oneLine(ev.notes || ev.summary || '')}`.trimEnd();
+      return line(`  ${ev.role}: ${ev.decision || ev.status || ''} ${oneLine(ev.notes || ev.summary || '')}`.trimEnd());
     case 'fallback':
-      return `${t} ! fallback: ${ev.model} failed (${oneLine(ev.reason)})`;
+      return line(`! fallback: ${ev.model} failed (${oneLine(ev.reason)})`, 'warn');
     case 'note':
-      return `${t}   ${ev.role || 'guild'}: ${oneLine(ev.msg, 300)}`;
+      return line(`  ${ev.role || 'guild'}: ${oneLine(ev.msg, 300)}`);
     case 'report':
-      return ev.level === 'phase' ? null : `${t} ${ev.level === 'warn' ? '!' : '·'} ${oneLine(ev.msg, 400)}`;
+      // "phase" and "fallback" reports are terminal text for events that are logged themselves
+      if (ev.level === 'phase' || ev.level === 'fallback') return null;
+      return ev.level === 'warn' ? line(`! ${oneLine(ev.msg, 400)}`, 'warn') : line(`· ${oneLine(ev.msg, 400)}`);
     case 'task_end':
-      return (
-        `${t} ${ev.accepted ? '✔' : '✖'} task ${ev.task_id} ${ev.accepted ? 'ACCEPTED' : 'not accepted'}` +
-        ` · ${ev.rounds} round(s) · $${ev.cost_usd}${ev.branch ? ' · branch ' + ev.branch : ''}`
+      return line(
+        `${ev.accepted ? '✔' : '✖'} task ${ev.task_id} ${ev.accepted ? 'ACCEPTED' : 'not accepted'}` +
+          ` · ${ev.rounds} round(s) · $${ev.cost_usd}${ev.branch ? ' · branch ' + ev.branch : ''}`,
+        ev.accepted ? 'ok' : 'bad'
       );
     case 'error':
-      return `${t} ✖ ${ev.task_id ? ev.task_id + ': ' : ''}${oneLine(ev.error, 400)}`;
+      return line(`✖ ${ev.task_id ? ev.task_id + ': ' : ''}${oneLine(ev.error, 400)}`, 'bad');
     case 'run_end':
-      return `${t} ■ run finished · $${ev.total_usd}`;
+      return line(`■ run finished · $${ev.total_usd}`);
     case 'job_done':
-      return `${t} ✔ ${ev.job} finished`;
+      return line(`✔ ${ev.job} finished`, 'ok');
     case 'job_error':
-      return `${t} ✖ ${ev.job} failed: ${String(ev.error || '').trim()}`;
+      return line(`✖ ${ev.job} failed: ${String(ev.error || '').trim()}`, 'bad');
     case 'job_cancelled':
-      return `${t} ■ ${ev.job} cancelled`;
-    case 'approval_request': {
-      const r = ev.request || {};
-      return `${t} ? waiting for approval: ${approvalTitle(r)}`;
-    }
+      return line(`■ ${ev.job} cancelled`, 'warn');
+    case 'approval_request':
+      return line(`? waiting for approval: ${approvalTitle(ev.request || {})}`, 'warn');
     case 'approval':
-      return `${t}   ${ev.approved ? 'approved' : 'declined'}${ev.auto ? ' (auto)' : ''}: ${ev.tool} ${oneLine(ev.target, 120)}`;
+      return line(
+        `  ${ev.approved ? 'approved' : 'declined'}${ev.auto ? ' (auto)' : ''}: ${ev.tool} ${oneLine(ev.target, 120)}`,
+        ev.approved ? '' : 'warn'
+      );
     case 'project_switched':
-      return `${t} · project: ${ev.root}`;
+      return line(`· project: ${ev.root}`);
     default:
       return null; // token, run_start, unknown kinds
   }
@@ -147,7 +160,7 @@ function traceText(runId, detail) {
   lines.push('');
   for (const ev of detail.events || []) {
     const line = eventLine(ev);
-    if (line) lines.push(line);
+    if (line) lines.push(line.text);
   }
   return lines.join('\n') + '\n';
 }

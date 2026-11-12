@@ -11,14 +11,18 @@ const { GuildClient, parseSseBlock } = require('../lib/client');
 const server = require('../lib/server');
 
 test('eventLine renders the events the server sends and ignores tokens', () => {
-  assert.match(fmt.eventLine({ kind: 'phase', phase: 'implement', task_id: 'T1', round: 2, ts: 1 }), /▶ implement T1 \(round 2\)/);
-  assert.match(fmt.eventLine({ kind: 'verification', passed: false, tests_run: 3, failures: ['a', 'b'] }), /tests: FAIL \(3 run\) — a; b/);
-  assert.match(fmt.eventLine({ kind: 'tool_call', role: 'engineer', tool: 'write_file', ok: true, args: { path: 'a.py' }, result_preview: 'created\na.py' }), /engineer write_file\(path="a.py"\) → created a.py/);
-  assert.match(fmt.eventLine({ kind: 'task_end', task_id: 'T1', accepted: true, rounds: 1, cost_usd: 0, branch: 'guild/t1-x' }), /✔ task T1 ACCEPTED .* branch guild\/t1-x/);
-  assert.match(fmt.eventLine({ kind: 'job_error', job: 'run', error: 'boom' }), /✖ run failed: boom/);
-  assert.match(fmt.eventLine({ kind: 'approval_request', request: { kind: 'edit', path: 'a.py', new_file: true } }), /waiting for approval: create a.py/);
-  assert.match(fmt.eventLine({ kind: 'approval', approved: false, tool: 'run_command', target: 'rm -rf x' }), /declined: run_command rm -rf x/);
-  assert.match(fmt.eventLine({ kind: 'job_cancelled', job: 'pair' }), /pair cancelled/);
+  assert.match(fmt.eventLine({ kind: 'phase', phase: 'implement', task_id: 'T1', round: 2, ts: 1 }).text, /▶ implement T1 \(round 2\)/);
+  assert.match(fmt.eventLine({ kind: 'verification', passed: false, tests_run: 3, failures: ['a', 'b'] }).text, /tests: FAIL \(3 run\) — a; b/);
+  assert.match(fmt.eventLine({ kind: 'tool_call', role: 'engineer', tool: 'write_file', ok: true, args: { path: 'a.py' }, result_preview: 'created\na.py' }).text, /engineer write_file\(path="a.py"\) → created a.py/);
+  assert.match(fmt.eventLine({ kind: 'task_end', task_id: 'T1', accepted: true, rounds: 1, cost_usd: 0, branch: 'guild/t1-x' }).text, /✔ task T1 ACCEPTED .* branch guild\/t1-x/);
+  assert.match(fmt.eventLine({ kind: 'job_error', job: 'run', error: 'boom' }).text, /✖ run failed: boom/);
+  assert.match(fmt.eventLine({ kind: 'approval_request', request: { kind: 'edit', path: 'a.py', new_file: true } }).text, /waiting for approval: create a.py/);
+  assert.match(fmt.eventLine({ kind: 'approval', approved: false, tool: 'run_command', target: 'rm -rf x' }).text, /declined: run_command rm -rf x/);
+  assert.match(fmt.eventLine({ kind: 'job_cancelled', job: 'pair' }).text, /pair cancelled/);
+  assert.strictEqual(fmt.eventLine({ kind: 'verification', passed: false, tests_run: 1 }).cls, 'bad');
+  assert.strictEqual(fmt.eventLine({ kind: 'task_end', task_id: 'T1', accepted: true, rounds: 1, cost_usd: 0 }).cls, 'ok');
+  assert.strictEqual(fmt.eventLine({ kind: 'phase', phase: 'plan' }).cls, 'phase');
+  assert.strictEqual(fmt.eventLine({ kind: 'report', level: 'fallback', msg: 'x' }), null);
   assert.strictEqual(fmt.eventLine({ kind: 'token', role: 'lead', text: 'x' }), null);
   assert.strictEqual(fmt.eventLine({ kind: 'report', level: 'phase', msg: 'x' }), null);
   assert.strictEqual(fmt.eventLine({ kind: 'something_new' }), null);

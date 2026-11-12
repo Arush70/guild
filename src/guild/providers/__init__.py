@@ -1,5 +1,4 @@
 from .base import (
-    Cancelled,
     Completion,
     Message,
     NotConfigured,
@@ -13,7 +12,6 @@ from .router import AllProvidersFailed, BudgetExceeded, CostTracker, Router
 __all__ = [
     "AllProvidersFailed",
     "BudgetExceeded",
-    "Cancelled",
     "Completion",
     "CostTracker",
     "Message",

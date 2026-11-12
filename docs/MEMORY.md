@@ -4,10 +4,21 @@ Current state of the project. Update at the end of every working session.
 
 ## Current status (2026-10-02)
 
-v0.2.x. 193 tests with scripted fake models; `ruff check` + `ruff format --check` clean (rule set
+v0.2.x. 229 tests with scripted fake models (193 at the time of this entry); `ruff check` + `ruff format --check` clean (rule set
 pinned). TASK-001 has one accepted free-profile real-model run; TASK-002 guards are in. A full
 code audit on 2026-10-02 fixed 14 defects (see CHANGELOG "Unreleased") — none of it is confirmed
 on a real model run yet; that re-run is the next step.
+
+## Untangle refactor 2026-11-12
+
+Whole-codebase restructuring with no intended behaviour change; the full decision log is
+`docs/UNTANGLE.md`. `workflow.py` went from ~1300 to ~750 lines: the plan (`plan.py`), git
+(`repo.py`), verification (`verify.py`), `.guild` paths (`paths.py`), path scoping
+(`tools/context.py`) and command policy (`tools/policy.py`) are modules of their own, and the
+CLI and dashboard use them instead of private `Guild` methods or raw dicts. 229 Python tests,
+22 extension tests. Not yet run on Windows or with a real model — do that before trusting it.
+The Anthropic model ids in the profiles and price table should be checked against the
+provider's current list.
 
 ## Break-it audit 2026-11-12 (what was wrong and what changed)
 

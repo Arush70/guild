@@ -268,7 +268,11 @@ src/guild/
   cli.py            typer commands
   ui/server.py      FastAPI dashboard (guild ui) + SSE event hub
   ui/index.html     the dashboard page (no build step)
-  workflow.py       Guild: plan / run_task / ask
+  workflow.py       Guild: plan / run_task / run_tasks / pair / ask
+  plan.py           Task, Plan, PlanStore (.guild/plan.json)
+  repo.py           every git command; a task's branch
+  verify.py         run tests + lint, detect removed tests
+  paths.py          where things live under .guild/
   agent.py          one role's tool-calling loop + repair retries
   schemas.py        output contracts per role (pydantic)
   hardware.py       GPU/RAM/Ollama detection, model recommendations, test-runner detection
@@ -276,6 +280,8 @@ src/guild/
   trace.py          JSONL trace
   sandbox.py        local + docker command runners
   tools/registry.py file, search, shell, git, web tools
+  tools/context.py  path scoping + a role's permissions
+  tools/policy.py   what read-only roles may run, where web_fetch may go
   providers/        openai_compat, anthropic, router (fallback + cost)
   data/roles/       built-in role YAMLs
   data/profiles/    free / lite / pro

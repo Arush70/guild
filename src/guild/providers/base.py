@@ -51,13 +51,9 @@ class Completion:
     usage: Usage
     model: str  # fully qualified "provider/model" that actually answered
     stop_reason: str = ""
-
-
-class Cancelled(BaseException):
-    """The owner cancelled the running job (dashboard / VS Code "stop", Ctrl+C in `guild pair`).
-
-    A BaseException on purpose: provider adapters and tools catch `Exception` to turn failures
-    into fallbacks or tool errors, and a cancel must pass straight through all of them."""
+    # filled in by the Router, which knows the prices and timed the call
+    usd: float = 0.0
+    latency_s: float = 0.0
 
 
 class ProviderError(Exception):
@@ -77,6 +73,11 @@ class NotConfigured(ProviderError):
         super().__init__(model, reason, retryable=False)
 
 
+# Key under which tool-call arguments that could not be parsed are kept, so the tool layer can
+# tell the model its call was malformed instead of running it with nothing.
+MALFORMED_ARGS = "_raw"
+
+
 def parse_json_args(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return raw
@@ -86,4 +87,4 @@ def parse_json_args(raw: Any) -> dict[str, Any]:
         v = json.loads(raw, strict=False)  # raw newlines inside strings are common
         return v if isinstance(v, dict) else {"value": v}
     except (json.JSONDecodeError, TypeError):
-        return {"_raw": str(raw)}
+        return {MALFORMED_ARGS: str(raw)}

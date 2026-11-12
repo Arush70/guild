@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from guild.plan import Plan, Task
 from guild.trace import read_trace
-from guild.workflow import Guild, Plan, Task
+from guild.workflow import Guild
 from tests.conftest import FakeProvider
 
 PLAN = {
@@ -92,7 +93,7 @@ def test_plan_saves_tasks(project, cfg, profile):
     plan = g.plan("add multiply")
     g.close()
     assert [t.id for t in plan.tasks] == ["T1"]
-    assert g.load_plan().tasks[0].title == "add multiply"
+    assert g.plans.load().tasks[0].title == "add multiply"
     kinds = [e["kind"] for e in read_trace(g.trace.path)]
     assert "model_call" in kinds and "tool_call" in kinds and kinds[-1] == "run_end"
 
@@ -277,8 +278,8 @@ def test_verification_detects_real_failure(project, cfg, profile):
     out = g.run_task(plan, plan.tasks[0])
     g.close()
     assert not out.accepted
-    assert out.verification["passed"] is False and any(
-        "test_bad" in f for f in out.verification["failures"]
+    assert out.verification.passed is False and any(
+        "test_bad" in f for f in out.verification.failures
     )
     assert "TESTS FAILED" in out.task.notes
 
@@ -291,7 +292,7 @@ def test_text_tool_calls_are_executed(project, cfg, profile):
         def __init__(self):
             self.n = 0
 
-        def complete(self, model_name, messages, tools, max_tokens, temperature):
+        def complete(self, model_name, messages, tools, max_tokens, temperature, on_token=None):
             self.n += 1
             if self.n == 1:
                 txt = 'Sure!\n{"name": "write_file", "arguments": {"path": "new.py", "content": "x = 1\\n"}}'
@@ -321,7 +322,7 @@ def test_guild_metadata_never_in_commits_or_diff(project, cfg, profile):
     )
     g = _guild(project, cfg, profile, fake)
     plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
-    g.save_plan(plan)
+    g.plans.save(plan)
     g.run_task(plan, plan.tasks[0])
     g.close()
     import subprocess
@@ -427,13 +428,13 @@ def test_merge_and_discard_helpers(project, cfg, profile):
     g = _guild(project, cfg, profile, fake)
     plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
     out = g.run_task(plan, plan.tasks[0])
-    d = g.branch_diff(out.task.branch)
+    d = g.repo.branch_diff(out.task.branch)
     assert d["exists"] and "multiply" in d["diff"] and "test_multiply.py" in d["stat"]
-    res = g.merge_branch(out.task.branch)
+    res = g.repo.merge_branch(out.task.branch)
     g.close()
     assert res["ok"], res
-    assert g.current_branch() == "master" and "multiply" in (project / "app.py").read_text()
-    assert not g._git(
+    assert g.repo.current_branch() == "master" and "multiply" in (project / "app.py").read_text()
+    assert not g.repo.out(
         "rev-parse", "--verify", "--quiet", out.task.branch
     )  # branch deleted after merge
 
@@ -475,7 +476,7 @@ def test_engineer_done_without_changes_is_pushed_back(project, cfg, profile):
 def test_run_task_records_traceback_on_crash(project, cfg, profile, monkeypatch):
     fake = FakeProvider({"engineer": ENGINEER_GOOD})
     g = _guild(project, cfg, profile, fake)
-    monkeypatch.setattr(g, "verify", lambda: (_ for _ in ()).throw(TypeError("boom")))
+    monkeypatch.setattr(g.verifier, "run", lambda *a: (_ for _ in ()).throw(TypeError("boom")))
     plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
     import pytest
 
@@ -483,7 +484,8 @@ def test_run_task_records_traceback_on_crash(project, cfg, profile, monkeypatch)
         g.run_task(plan, plan.tasks[0])
     g.close()
     err = [e for e in read_trace(g.trace.path) if e["kind"] == "error"]
-    assert err and "boom" in err[0]["error"] and "verify" in err[0]["traceback"]
+    assert err and "boom" in err[0]["error"]
+    assert "Traceback" in err[0]["traceback"] and "TypeError: boom" in err[0]["traceback"]
     assert plan.tasks[0].status == "todo" and "guild error" in plan.tasks[0].notes
 
 
@@ -539,9 +541,9 @@ def test_pytest_no_tests_collected_is_not_a_failure(project, cfg, profile):
     for f in ("test_app.py",):
         (project / f).unlink()
     g = Guild(project, cfg, profile)
-    v = g.verify()
+    v = g.verifier.run()
     g.close()
-    assert v["passed"] is True and v["tests_run"] == 0 and "no tests collected" in v["output_tail"]
+    assert v.passed is True and v.tests_run == 0 and "no tests collected" in v.output_tail
 
 
 def test_selected_task_with_unfinished_dependency_is_skipped(project, cfg, profile):
@@ -668,21 +670,28 @@ def test_deleting_existing_tests_fails_verification(project, cfg, profile):
     out = g.run_task(plan, plan.tasks[0])
     g.close()
     assert not out.accepted
-    assert out.verification["passed"] is False and out.verification["removed_tests"] == [
+    assert out.verification.passed is False and out.verification.removed_tests == [
         "test_app.py::test_add"
     ]
     assert "EXISTING TESTS REMOVED" in out.task.notes
 
 
-def test_norm_keeps_leading_dot_names():
-    """Regression: the read/written key must not strip the dot off dotfiles or dot-folders."""
-    from guild.tools.registry import _norm
+def test_dotfile_read_then_overwrite_counts_as_the_same_file(project, cfg, profile):
+    """Regression: `.github/x` and `./.github/x` are one file to the read-before-overwrite
+    guard; the leading dot of a dot-folder must not be lost when paths are compared."""
+    from guild.tools import dispatch
 
-    assert _norm(".github/workflows/ci.yml") == ".github/workflows/ci.yml"
-    assert _norm(".env") == ".env"
-    assert _norm("./app.py") == "app.py"
-    assert _norm("src\\guild\\x.py") == "src/guild/x.py"
-    assert _norm(".github/x") == _norm("./.github/x")
+    (project / ".github").mkdir()
+    (project / ".github" / "ci.yml").write_text("on: push\n")
+    g = _guild(project, cfg, profile, FakeProvider({}))
+    ctx = g.agent("engineer").ctx
+    g.close()
+    refused = dispatch(ctx, "write_file", {"path": ".github/ci.yml", "content": "on: pull\n"})
+    assert refused.startswith("refused")
+    dispatch(ctx, "read_file", {"path": ".github/ci.yml"})
+    out = dispatch(ctx, "write_file", {"path": "./.github/ci.yml", "content": "on: pull\n"})
+    assert out.startswith("overwrote"), out
+    assert ctx.files_written == {".github/ci.yml"}
 
 
 def test_plan_json_with_unknown_keys_still_loads(project, cfg, profile):
@@ -691,12 +700,12 @@ def test_plan_json_with_unknown_keys_still_loads(project, cfg, profile):
 
     g = _guild(project, cfg, profile, FakeProvider({}))
     plan = Plan(goal="g", roadmap=[], tasks=[Task(**PLAN["tasks"][0])])
-    g.save_plan(plan)
-    d = json.loads(g.plan_path().read_text())
+    g.plans.save(plan)
+    d = json.loads(g.paths.plan.read_text())
     d["tasks"][0]["merged"] = True
     d["tasks"][0]["future_field"] = {"x": 1}
-    g.plan_path().write_text(json.dumps(d))
-    loaded = g.load_plan()
+    g.paths.plan.write_text(json.dumps(d))
+    loaded = g.plans.load()
     g.close()
     assert loaded.tasks[0].merged is True and loaded.tasks[0].id == "T1"
 
@@ -729,9 +738,9 @@ def test_assistant_and_performance_are_read_only(project, cfg, profile):
         }
     )
     g = _guild(project, cfg, profile, fake)
-    assert g._ctx(g.role("assistant")).readonly
-    assert g._ctx(g.role("performance")).readonly
-    assert not g._ctx(g.role("engineer")).readonly
+    assert g.agent("assistant").ctx.readonly
+    assert g.agent("performance").ctx.readonly
+    assert not g.agent("engineer").ctx.readonly
     g.agent("assistant").run("hi", expect_json=False)
     g.close()
     assert "pwned" not in (project / "app.py").read_text()

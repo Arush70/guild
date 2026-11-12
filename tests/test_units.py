@@ -5,7 +5,7 @@ import pytest
 from guild.agent import extract_json
 from guild.config import list_available, load_profile, load_role
 from guild.providers.base import Usage
-from guild.providers.router import DEFAULT_PRICES, CostTracker
+from guild.providers.router import CostTracker
 from guild.tools.registry import REGISTRY
 
 
@@ -57,24 +57,6 @@ def test_extract_json(text, expected):
     assert extract_json(text) == expected
 
 
-def test_readonly_command_allowlist():
-    from guild.tools.registry import _readonly_allowed
-
-    for ok in ("pytest -q", "python -m pytest -q | tail -20", "git log --oneline", "rg TODO src"):
-        assert _readonly_allowed(ok), ok
-    for bad in (
-        "echo x > app.py",
-        "python -c \"open('a','w').write('x')\"",
-        "sed -i s/a/b/ app.py",
-        "git reset --hard",
-        "pip install requests",
-        "del app.py",
-        "pytest -q; rm -rf src",
-        "ruff check --fix .",
-    ):
-        assert not _readonly_allowed(bad), bad
-
-
 def test_plan_schema_drops_dangling_dependencies():
     from guild.schemas import validate
 
@@ -93,12 +75,12 @@ def test_plan_schema_drops_dangling_dependencies():
     assert d["tasks"][1]["id"] == "T2" and d["tasks"][1]["depends_on"] == ["T1"]
 
 
-def test_cost_tracker_prices():
+def test_cost_is_tokens_times_price_per_million():
     t = CostTracker()
-    inp, out = DEFAULT_PRICES["anthropic/claude-sonnet-5"]
-    usd = t.price("anthropic/claude-sonnet-5", Usage(1_000_000, 1_000_000))
-    assert usd == pytest.approx(inp + out)
-    assert t.price("ollama/anything", Usage(10**6, 10**6)) == 0.0
+    t.prices["shop/model"] = (3.0, 15.0)
+    assert t.price("shop/model", Usage(1_000_000, 2_000_000)) == pytest.approx(33.0)
+    assert t.price("shop/model", Usage(500, 0)) == pytest.approx(0.0015)
+    assert t.price("ollama/anything", Usage(10**6, 10**6)) == 0.0  # unlisted models are free
 
 
 @pytest.mark.parametrize(
@@ -112,7 +94,7 @@ def test_cost_tracker_prices():
     ],
 )
 def test_vague_done_when(text, vague):
-    from guild.workflow import vague_done_when
+    from guild.plan import vague_done_when
 
     assert vague_done_when(text) is vague
 

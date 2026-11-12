@@ -21,7 +21,7 @@ from tests.test_workflow import (
 
 
 @pytest.fixture
-def client(project, cfg, profile, monkeypatch):
+def client(project, cfg, profile, use_models):
     save_project_config(project, cfg)
     # make the "test" profile resolvable from the project and inject the fake provider
     import yaml
@@ -38,14 +38,7 @@ def client(project, cfg, profile, monkeypatch):
             "docs": DOCS,
         }
     )
-    from guild.providers import router as router_mod
-
-    orig = router_mod.Router._provider_for
-
-    def patched(self, prefix):
-        return fake if prefix == "fake" else orig(self, prefix)
-
-    monkeypatch.setattr(router_mod.Router, "_provider_for", patched)
+    use_models(fake)
     app = server.create_app(project)
     return TestClient(app, base_url="http://127.0.0.1:7331")
 
@@ -158,8 +151,7 @@ def test_project_switch_and_fs(client, project, tmp_path_factory):
     assert client.post("/api/project", json={"path": str(other / "missing")}).status_code == 400
 
 
-def test_chat_roundtrip(client, monkeypatch):
-    from guild.providers import router as router_mod
+def test_chat_roundtrip(client, use_models):
     from guild.providers.base import Completion, Message, Usage
 
     class Talker:
@@ -175,12 +167,7 @@ def test_chat_roundtrip(client, monkeypatch):
                 "stop",
             )
 
-    orig = router_mod.Router._provider_for
-    monkeypatch.setattr(
-        router_mod.Router,
-        "_provider_for",
-        lambda self, p: Talker() if p == "fake" else orig(self, p),
-    )
+    use_models(Talker())
     client.post("/api/chat", json={"message": "what does app.py do?"})
     _wait(client, "chat")
     hist = client.get("/api/chat").json()
@@ -197,10 +184,9 @@ def test_chat_roundtrip(client, monkeypatch):
     assert client.get("/api/chat").json() == []
 
 
-def test_revise_plan_keeps_done_tasks(client, monkeypatch):
+def test_revise_plan_keeps_done_tasks(client, use_models):
     import json as _json
 
-    from guild.providers import router as router_mod
     from guild.providers.base import Completion, Message, Usage
 
     revised = {
@@ -241,11 +227,7 @@ def test_revise_plan_keeps_done_tasks(client, monkeypatch):
                 "stop",
             )
 
-    orig = router_mod.Router._provider_for
-    lead = Lead()
-    monkeypatch.setattr(
-        router_mod.Router, "_provider_for", lambda self, p: lead if p == "fake" else orig(self, p)
-    )
+    use_models(Lead())
     client.post("/api/plan", json={"goal": "arith"})
     _wait(client, "plan")
     client.post("/api/plan/task", json={"id": "T1", "status": "done"})

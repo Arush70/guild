@@ -97,14 +97,9 @@ def test_on_token_streams_to_callback(project, cfg, profile):
             return Completion(Message("assistant", text), Usage(1, 1), f"fake/{model_name}", "stop")
 
     got = []
-    g = Guild(project, cfg, profile)
+    g = Guild(project, cfg, profile, on_token=lambda role, chunk: got.append((role, chunk)))
     g.router.register_provider("fake", Streamer())
-    role = g.role("critic")
-    from guild.agent import Agent
-
-    res = Agent(
-        role, g.router, g._ctx(role), g.trace, on_token=lambda r, c: got.append((r, c))
-    ).run("review")
+    res = g.agent("critic").run("review")
     g.close()
     assert res.data["verdict"] == "approve"
     assert "".join(c for _, c in got) == '{"verdict": "approve", "findings": [], "summary": "ok"}'

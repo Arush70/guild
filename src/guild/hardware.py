@@ -14,6 +14,12 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .providers.status import is_pulled, key_env, ollama_models
+
+# Providers whose API key the init wizard looks for.
+CLOUD_PROVIDERS = ("anthropic", "openai", "gemini", "groq", "deepseek", "openrouter")
+TIERS = ("free", "lite", "pro")
+
 
 @dataclass
 class Hardware:
@@ -61,15 +67,9 @@ def detect() -> Hardware:
     hw.gpu, hw.vram_gb = _nvidia()
     if hw.gpu is None and platform.system() == "Darwin" and platform.machine() == "arm64":
         hw.gpu, hw.vram_gb = "Apple Silicon (unified memory)", None
-    hw.ollama_reachable, hw.ollama_models = _ollama()
-    hw.keys = {
-        "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
-        "openai": bool(os.environ.get("OPENAI_API_KEY")),
-        "gemini": bool(os.environ.get("GEMINI_API_KEY")),
-        "groq": bool(os.environ.get("GROQ_API_KEY")),
-        "deepseek": bool(os.environ.get("DEEPSEEK_API_KEY")),
-        "openrouter": bool(os.environ.get("OPENROUTER_API_KEY")),
-    }
+    pulled = ollama_models()
+    hw.ollama_reachable, hw.ollama_models = pulled is not None, pulled or []
+    hw.keys = {p: bool(os.environ.get(key_env(p))) for p in CLOUD_PROVIDERS}
     hw.docker = shutil.which("docker") is not None
     hw.git = shutil.which("git") is not None
     return hw
@@ -102,7 +102,7 @@ def _ram_gb() -> float | None:
             st.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))  # type: ignore[attr-defined]
             return round(st.ullTotalPhys / 2**30, 1)
-        except Exception:
+        except (OSError, AttributeError, ValueError):
             return None
     if platform.system() == "Darwin":
         try:
@@ -114,7 +114,7 @@ def _ram_gb() -> float | None:
                 timeout=3,
             ).stdout
             return round(int(out.strip()) / 2**30, 1)
-        except Exception:
+        except (OSError, subprocess.SubprocessError, ValueError):
             return None
     return None
 
@@ -134,7 +134,7 @@ def _nvidia() -> tuple[str | None, float | None]:
             .stdout.strip()
             .splitlines()
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return None, None
     if not out:
         return None, None
@@ -143,17 +143,6 @@ def _nvidia() -> tuple[str | None, float | None]:
         return name.strip(), round(float(mem.strip()) / 1024, 1)
     except ValueError:
         return name.strip(), None
-
-
-def _ollama() -> tuple[bool, list[str]]:
-    import httpx
-
-    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
-    try:
-        r = httpx.get(f"{host}/api/tags", timeout=3)
-        return True, [m["name"] for m in r.json().get("models", [])]
-    except Exception:
-        return False, []
 
 
 def recommend_local(hw: Hardware) -> dict[str, list[str]]:
@@ -189,6 +178,8 @@ def recommend_local(hw: Hardware) -> dict[str, list[str]]:
 
 def build_profile(hw: Hardware, tier: str) -> dict:
     """Compose a profile dict for this machine: local recommendations + cloud fallbacks by tier."""
+    if tier not in TIERS:
+        raise ValueError(f"unknown profile '{tier}' (choose from {', '.join(TIERS)})")
     local = recommend_local(hw)
     free_cloud = []
     if hw.keys.get("groq"):
@@ -244,13 +235,7 @@ def build_profile(hw: Hardware, tier: str) -> dict:
         }
         desc = "Best model in every seat"
         budget = None
-    # de-duplicate while keeping order
-    for k, v in slots.items():
-        seen: list[str] = []
-        for m in v:
-            if m not in seen:
-                seen.append(m)
-        slots[k] = seen
+    slots = {slot: list(dict.fromkeys(chain)) for slot, chain in slots.items()}
     return {
         "name": tier,
         "description": desc,
@@ -271,16 +256,6 @@ def detect_test_command(root: Path) -> str:
     ):
         return "python -m pytest -q"
     if (root / "package.json").exists():
-        try:
-            import json
-
-            scripts = json.loads((root / "package.json").read_text(encoding="utf-8")).get(
-                "scripts", {}
-            )
-            if "test" in scripts:
-                return "npm test --silent"
-        except (OSError, ValueError):
-            pass
         return "npm test --silent"
     if (root / "Cargo.toml").exists():
         return "cargo test --quiet"
@@ -297,15 +272,10 @@ def detect_test_command(root: Path) -> str:
 
 def missing_pulls(profile_slots: dict[str, list[str]], hw: Hardware) -> list[str]:
     """Ollama models the profile wants that aren't pulled yet."""
-    have = set(hw.ollama_models) | {m.split(":")[0] for m in hw.ollama_models}
-    want: list[str] = []
-    for chain in profile_slots.values():
-        for m in chain:
-            if m.startswith("ollama/"):
-                name = m.split("/", 1)[1]
-                if name not in have and name.split(":")[0] not in have and name not in want:
-                    want.append(name)
-    return want
+    wanted = [
+        m.split("/", 1)[1] for c in profile_slots.values() for m in c if m.startswith("ollama/")
+    ]
+    return [m for m in dict.fromkeys(wanted) if not is_pulled(m, hw.ollama_models)]
 
 
 def summary_lines(hw: Hardware) -> list[str]:

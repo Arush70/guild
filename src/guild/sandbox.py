@@ -13,11 +13,15 @@ import os
 import shutil
 import signal
 import subprocess
+import threading
 import time
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .providers.base import Cancelled
+from .errors import Cancelled
+from .paths import PROTECTED_DIRS
 
 SECRET_HINTS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
 
@@ -39,51 +43,54 @@ def _clean_env() -> dict[str, str]:
     return env
 
 
-class LocalSandbox:
-    kind = "local"
-
-    def __init__(self, root: Path):
-        self.root = root
-        self.cancel = None  # threading.Event; when set, a running command is killed
-
-    def run(self, command: str, timeout: int = 120) -> RunResult:
-        # Popen + process group so a timeout kills the whole tree. With subprocess.run() on
-        # Windows, kill() only ends cmd.exe; the python/pytest grandchild keeps the pipe open
-        # and communicate() blocks forever — guild would hang on an infinite-loop test.
-        kwargs: dict = (
-            {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-            if os.name == "nt"
-            else {"start_new_session": True}
-        )
-        proc = subprocess.Popen(
-            command,
-            shell=True,
-            cwd=self.root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            env=_clean_env(),
-            encoding="utf-8",
-            errors="replace",
-            **kwargs,
-        )
-        deadline = time.monotonic() + timeout
-        while True:
+def _run(
+    command: str | list[str],
+    *,
+    cwd: Path | None,
+    timeout: int,
+    cancel: threading.Event,
+    stop: Callable[[subprocess.Popen], None],
+    startup: int = 0,
+) -> RunResult:
+    """Run a command with a time limit; `stop(proc)` must end it and everything it started.
+    `startup` is extra time that does not count against the command (starting a container).
+    Raises Cancelled when `cancel` is set while it runs."""
+    # Popen + its own process group, so the whole tree can be killed. With subprocess.run() on
+    # Windows, kill() only ends cmd.exe; the python/pytest grandchild keeps the pipe open and
+    # communicate() blocks forever — guild would hang on an infinite-loop test.
+    group: dict = (
+        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        if os.name == "nt"
+        else {"start_new_session": True}
+    )
+    proc = subprocess.Popen(
+        command,
+        shell=isinstance(command, str),
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=_clean_env(),
+        encoding="utf-8",
+        errors="replace",
+        **group,
+    )
+    deadline = time.monotonic() + timeout + startup
+    while True:
+        try:
+            # short waits so a cancel (owner pressed stop) ends a 10-minute test run now
+            out, _ = proc.communicate(timeout=max(0.05, min(0.5, deadline - time.monotonic())))
+            return RunResult(proc.returncode, out or "")
+        except subprocess.TimeoutExpired:
+            if not cancel.is_set() and time.monotonic() < deadline:
+                continue
+            stop(proc)
             try:
-                # short waits so a cancel (owner pressed stop) ends a 10-minute test run now
-                out, _ = proc.communicate(timeout=max(0.05, min(0.5, deadline - time.monotonic())))
-                return RunResult(proc.returncode, out or "")
+                out, _ = proc.communicate(timeout=15)
             except subprocess.TimeoutExpired:
-                cancelled = self.cancel is not None and self.cancel.is_set()
-                if not cancelled and time.monotonic() < deadline:
-                    continue
-                _kill_tree(proc)
-                try:
-                    out, _ = proc.communicate(timeout=15)
-                except subprocess.TimeoutExpired:
-                    out = ""
-                if cancelled:
-                    raise Cancelled() from None
-                return RunResult(124, f"{out or ''}\n[timed out after {timeout}s]", timed_out=True)
+                out = ""
+            if cancel.is_set():
+                raise Cancelled() from None
+            return RunResult(124, f"{out or ''}\n[timed out after {timeout}s]", timed_out=True)
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -94,60 +101,65 @@ def _kill_tree(proc: subprocess.Popen) -> None:
             )
         else:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except Exception:
+    except OSError:  # already gone, or no such group
         proc.kill()
 
 
-class DockerSandbox:
-    kind = "docker"
+class LocalSandbox:
+    def __init__(self, root: Path, cancel: threading.Event | None = None):
+        self.root = root
+        self.cancel = cancel or threading.Event()
 
-    def __init__(self, root: Path, image: str = "python:3.11-slim", network: bool = False):
+    def run(self, command: str, timeout: int = 120) -> RunResult:
+        return _run(command, cwd=self.root, timeout=timeout, cancel=self.cancel, stop=_kill_tree)
+
+
+class DockerSandbox:
+    def __init__(self, root: Path, image: str, cancel: threading.Event | None = None):
         self.root = root
         self.image = image
-        self.network = network
+        self.cancel = cancel or threading.Event()
         if shutil.which("docker") is None:
             raise RuntimeError("docker not found on PATH; set sandbox: local in .guild/config.yaml")
 
     def run(self, command: str, timeout: int = 120) -> RunResult:
+        name = f"guild-{uuid.uuid4().hex[:12]}"
         args = [
             "docker",
             "run",
             "--rm",
-            "-v",
-            f"{self.root.resolve()}:/work",
-            "-w",
-            "/work",
+            "--name",
+            name,
+            "--network",
+            "none",
             "--memory",
             "2g",
             "--cpus",
             "2",
+            "-v",
+            f"{self.root.resolve()}:/work",
+            "-w",
+            "/work",
         ]
         # .git and .guild are mounted read-only on top of the project: a command in the
         # container must not plant a git hook or edit git/guild config, because git and guild
         # then run on the host — outside the sandbox — and would execute it.
-        for protected in (".git", ".guild"):
+        for protected in sorted(PROTECTED_DIRS):
             if (self.root / protected).is_dir():
                 args += ["-v", f"{(self.root / protected).resolve()}:/work/{protected}:ro"]
-        if not self.network:
-            args += ["--network", "none"]
         args += [self.image, "sh", "-c", command]
-        try:
-            r = subprocess.run(
-                args,
-                capture_output=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout + 15,
-                env=_clean_env(),
-            )
-        except subprocess.TimeoutExpired:
-            return RunResult(124, f"[timed out after {timeout}s]", timed_out=True)
-        return RunResult(r.returncode, (r.stdout or "") + (r.stderr or ""))
+
+        def stop(proc: subprocess.Popen) -> None:
+            # killing the docker client leaves the container running; end the container
+            subprocess.run(["docker", "kill", name], capture_output=True, check=False)
+            _kill_tree(proc)
+
+        return _run(args, cwd=None, timeout=timeout, cancel=self.cancel, stop=stop, startup=15)
 
 
-def make_sandbox(root: Path, kind: str, image: str = "python:3.11-slim"):
+def make_sandbox(root: Path, kind: str, image: str, cancel: threading.Event | None = None):
     if kind == "docker":
-        return DockerSandbox(root, image)
+        return DockerSandbox(root, image, cancel)
     if kind != "local":
         raise ValueError(f"unknown sandbox {kind!r} (use 'local' or 'docker')")
-    return LocalSandbox(root)
+    return LocalSandbox(root, cancel)

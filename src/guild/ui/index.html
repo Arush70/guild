@@ -196,7 +196,7 @@ const api = async (path, body) => {
   return r.json();
 };
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const ROLES = ['lead','engineer','verifier','critic','security','docs','researcher','assistant'];
+let ROLES = [];  // from /api/state: every role this project has
 let state = null, agentStats = {};
 
 // ---------- team panel
@@ -266,6 +266,7 @@ async function refresh() {
   // a pair turn is waiting for an answer (page reloaded, or the dialog was dismissed)
   if (state.pending_approvals?.length && !approvalOpen) showApproval(state.pending_approvals[0]);
   $('#root').textContent = state.root;
+  if (ROLES.join() !== state.roles.join()) { ROLES = state.roles; renderTeam(); }
   const sel = $('#profile');
   if (sel.options.length === 0) {
     for (const p of state.profiles) sel.add(new Option(p, p));
@@ -406,7 +407,7 @@ function renderChat(items) {
   el.innerHTML = items.map(m => `<div class="msg ${m.role}">${esc(m.content)}${m.model ? `<span class="m">${esc(m.model)}</span>` : ''}</div>`).join('') || '<div class="muted small">Ask anything about this project. In chat mode the assistant reads files, searches and runs tests but never edits. Switch to a pair mode to let it make changes, with your approval.</div>';
   el.scrollTop = el.scrollHeight;
 }
-async function loadChat() { try { renderChat(await api('/api/chat')); } catch {} }
+async function loadChat() { try { renderChat(await api('/api/chat')); } catch (err) { console.error('guild: chat not loaded', err); } }
 async function sendChat() {
   const message = $('#chatQ').value.trim(); if (!message) return;
   $('#chatQ').value = '';
@@ -516,7 +517,7 @@ function onEvent(ev) {
       }
       liveAppend(ev.role, ev.text); return;
     case 'phase': {
-      const who = {plan:'lead', revise_plan:'lead', implement:'engineer', verify:'verifier', critique:'critic', security:'security', lead_review:'lead', docs:'docs', chat:'assistant', pair:'assistant', ask: ev.role}[ev.phase];
+      const who = ev.role;
       for (const r of ROLES) if (agentStats[r]?.state === 'active') setAgent(r, {state:'done'});
       if (who) setAgent(who, {state:'active'});
       logLine('phase', `▶ ${ev.phase}${ev.task_id?' '+ev.task_id:''}${ev.round?' round '+ev.round:''}${ev.escalated?' (escalated)':''}${ev.goal?': '+ev.goal:''}`);
@@ -535,7 +536,7 @@ function onEvent(ev) {
     case 'decision':
       logLine('decision', `${ev.role}: ${ev.decision||ev.status||''} ${ev.notes||ev.summary||''}`.trim()); break;
     case 'fallback': logLine('fallback', `fallback: ${ev.model} failed (${ev.reason})`); break;
-    case 'report': if (ev.level !== 'phase' && !ev.msg.includes('trying next candidate')) logLine('report ' + ev.level, ev.msg); break;
+    case 'report': if (ev.level !== 'phase' && ev.level !== 'fallback') logLine('report ' + ev.level, ev.msg); break;
     case 'task_end':
       logLine(ev.accepted?'job_done':'job_error', `task ${ev.task_id} ${ev.accepted?'ACCEPTED':'not accepted'} · ${ev.rounds} round(s)${ev.escalated?' · escalated':''} · $${ev.cost_usd}${ev.branch?' · branch '+ev.branch+' — review & merge it':''}`); break;
     case 'run_end': logLine('job_done', `run finished · $${ev.total_usd}`); break;
@@ -562,7 +563,7 @@ function onEvent(ev) {
 }
 function connect() {
   const es = new EventSource('/api/events');
-  es.onmessage = e => { try { onEvent(JSON.parse(e.data)); } catch {} };
+  es.onmessage = e => { try { onEvent(JSON.parse(e.data)); } catch (err) { console.error('guild: event not handled', err); } };
   es.onerror = () => { es.close(); setTimeout(connect, 2000); };
 }
 const style = document.createElement('style'); style.textContent = '.hideTools .tool_call{display:none}'; document.head.appendChild(style);

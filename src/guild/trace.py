@@ -3,9 +3,19 @@
 One file per run at .guild/runs/<run_id>/trace.jsonl. Schema is deliberately flat so it can be
 loaded with pandas and analysed offline (the same discipline as ASTRA/MACS traces).
 
-Event kinds:
-  run_start, run_end, phase, model_call, tool_call, decision, verification, review_input,
-  fallback, error, note, task_end
+Event kinds written to the trace (every one also has seq, ts, run_id):
+  run_start, run_end   one pair per Guild object
+  phase                a step starts: phase, role (who works on it), task_id, round
+  model_call           one completion: role, slot, model, tokens, usd, latency_s
+  tool_call            role, tool, args, ok, result_preview
+  approval             pair mode: the owner's answer to a proposed edit or command
+  verification         the fields of verify.Verification
+  review_input         what the reviewers were shown: diff_chars, files_in_diff
+  decision             a role's structured verdict
+  fallback             a model failed and the router moved to the next candidate
+  note, error, task_end
+
+The dashboard server adds its own kinds on the live stream only (see ui/server.py Hub).
 """
 
 from __future__ import annotations
@@ -14,7 +24,7 @@ import contextlib
 import json
 import time
 import uuid
-from dataclasses import asdict, is_dataclass
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +45,7 @@ class Trace:
     def emit(self, kind: str, **fields: Any) -> dict[str, Any]:
         self._seq += 1
         ev = {"seq": self._seq, "ts": round(time.time(), 3), "run_id": self.run_id, "kind": kind}
-        ev.update({k: _jsonable(v) for k, v in fields.items()})
+        ev.update({k: jsonable(v) for k, v in fields.items()})
         # A trace problem must never take a run down: unknown objects are stringified and a
         # closed/failed file is ignored (late events from a UI thread after close()).
         with contextlib.suppress(OSError, ValueError):
@@ -49,7 +59,6 @@ class Trace:
         with contextlib.suppress(OSError):
             self._f.close()
 
-    # convenience -----------------------------------------------------------
     def model_call(
         self,
         *,
@@ -101,15 +110,19 @@ def _short_args(args: dict) -> dict:
     return out
 
 
-def _jsonable(v: Any) -> Any:
+def jsonable(v: Any) -> Any:
+    """Plain JSON data from guild's own objects (events, job results)."""
+    if hasattr(v, "to_dict"):
+        return jsonable(v.to_dict())
     if is_dataclass(v) and not isinstance(v, type):
-        return asdict(v)
+        # field by field, not asdict(): a nested object keeps the say over its own to_dict()
+        return {f.name: jsonable(getattr(v, f.name)) for f in fields(v)}
     if isinstance(v, Path):
         return str(v)
     if isinstance(v, dict):
-        return {str(k): _jsonable(x) for k, x in v.items()}
+        return {str(k): jsonable(x) for k, x in v.items()}
     if isinstance(v, (set, tuple, list)):
-        return [_jsonable(x) for x in v]
+        return [jsonable(x) for x in v]
     if isinstance(v, bytes):
         return v.decode("utf-8", errors="replace")
     return v
@@ -131,3 +144,36 @@ def read_trace(path: Path) -> list[dict[str, Any]]:
             if isinstance(ev, dict) and "kind" in ev:
                 events.append(ev)
     return events
+
+
+def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Totals of one run's trace: what `guild cost`, the dashboard's run list and a run's detail
+    view all show."""
+    by_role: dict[str, dict[str, Any]] = {}
+    for e in events:
+        if e["kind"] != "model_call":
+            continue
+        r = by_role.setdefault(
+            e.get("role") or "?",
+            {"calls": 0, "input_tokens": 0, "output_tokens": 0, "usd": 0.0, "latency_s": 0.0},
+        )
+        r["calls"] += 1
+        for key in ("input_tokens", "output_tokens", "usd", "latency_s"):
+            r[key] += e.get(key) or 0
+        r.setdefault("models", set()).add(str(e.get("model")))
+    for r in by_role.values():
+        r["models"] = sorted(r["models"])
+        r["usd"] = round(r["usd"], 5)
+        r["latency_s"] = round(r["latency_s"], 1)
+    start = next((e for e in events if e["kind"] == "run_start"), {})
+    return {
+        "profile": start.get("profile"),
+        "calls": sum(r["calls"] for r in by_role.values()),
+        "input_tokens": sum(r["input_tokens"] for r in by_role.values()),
+        "output_tokens": sum(r["output_tokens"] for r in by_role.values()),
+        "usd": round(sum(r["usd"] for r in by_role.values()), 4),
+        "by_role": by_role,
+        "phases": [e.get("phase") for e in events if e["kind"] == "phase"],
+        "started": events[0].get("ts", 0) if events else 0,
+        "ended": events[-1].get("ts", 0) if events else 0,
+    }

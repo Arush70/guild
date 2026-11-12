@@ -11,21 +11,24 @@ import contextlib
 import json
 import os
 import queue
+import string
 import sys
 import threading
 import time
+import traceback
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..config import (
-    GUILD_DIR,
     ProjectConfig,
     list_available,
     load_profile,
@@ -33,9 +36,16 @@ from ..config import (
     load_role,
     save_project_config,
 )
-from ..providers import AllProvidersFailed, BudgetExceeded, Cancelled
-from ..providers.openai_compat import ENDPOINTS
-from ..trace import read_trace
+from ..errors import Cancelled
+from ..hardware import detect_test_command
+from ..paths import ProjectPaths
+from ..plan import Plan, PlanError, PlanStore, Task, UnknownTask
+from ..providers import AllProvidersFailed, BudgetExceeded
+from ..providers.status import ollama_models, profile_status
+from ..repo import Repo
+from ..tools import Workspace
+from ..trace import jsonable, read_trace, summarize
+from ..workflow import PAIR_MODES, Guild, PairSession
 
 # --------------------------------------------------------------------------- job runner
 
@@ -50,7 +60,13 @@ class Job:
 
 
 class Hub:
-    """One background worker + fan-out of events to any number of SSE subscribers."""
+    """One background worker + fan-out of events to any number of SSE subscribers.
+
+    Subscribers get every trace event (see guild.trace) plus these, which are never written
+    to a trace: token (streamed text, batched), report (level + msg for a log line),
+    approval_request / approval_resolved (pair mode), job_done / job_error / job_cancelled,
+    project_switched.
+    """
 
     def __init__(self, root: Path):
         self.root = root
@@ -124,10 +140,14 @@ class Hub:
         for q in list(self.subscribers):
             q.put(ev)  # tokens are not kept in history — they're ephemeral
 
-    def start(self, kind: str, fn) -> Job:
+    def start(self, kind: str, fn, accepted: Callable[[], None] | None = None) -> Job:
+        """Run `fn` on the worker thread. `accepted` runs first, only when the job is really
+        going to start (a chat message is recorded then, never when the request is refused)."""
         with self.lock:  # check-and-set under the lock: two clicks must not start two jobs
             if self.busy():
                 raise HTTPException(409, f"a {self.job.kind} job is already running")
+            if accepted:
+                accepted()
             job = Job(kind=kind)
             self.job = job
 
@@ -135,7 +155,7 @@ class Hub:
             try:
                 job.result = fn()
                 job.status = "done"
-                self.publish({"kind": "job_done", "job": kind, "result": _jsonable(job.result)})
+                self.publish({"kind": "job_done", "job": kind, "result": jsonable(job.result)})
             except Cancelled:
                 job.status = "cancelled"
                 job.error = "cancelled"
@@ -145,8 +165,6 @@ class Hub:
                 job.error = str(e)
                 self.publish({"kind": "job_error", "job": kind, "error": str(e)})
             except Exception as e:
-                import traceback
-
                 tb = traceback.format_exc()
                 job.status = "error"
                 job.error = f"{type(e).__name__}: {e}"
@@ -157,20 +175,6 @@ class Hub:
 
         threading.Thread(target=_run, daemon=True).start()
         return job
-
-
-def _jsonable(v: Any) -> Any:
-    if hasattr(v, "to_dict"):
-        return v.to_dict()
-    if hasattr(v, "__dataclass_fields__"):
-        return {k: _jsonable(getattr(v, k)) for k in v.__dataclass_fields__ if k != "history"}
-    if isinstance(v, dict):
-        return {k: _jsonable(x) for k, x in v.items()}
-    if isinstance(v, (list, tuple, set)):
-        return [_jsonable(x) for x in v]
-    if isinstance(v, Path):
-        return str(v)
-    return v
 
 
 # --------------------------------------------------------------------------- app
@@ -235,58 +239,60 @@ class _State:
     CHAT_KEEP = 200
 
     def __init__(self, root: Path):
-        self.root = root.resolve()
-        self.hub = Hub(self.root)
-        self.active = None  # the Guild of the running job, for /api/cancel
-        self.approvals: dict[str, dict] = {}  # pending approval requests of a pair turn
-        self.auto_edits = False  # "approve all edits" for the current pair turn
-        self.chat_history: list[dict] = self._load_chat()
+        self.hub = Hub(root.resolve())
+        self._open(root)
 
-    def switch(self, root: Path) -> None:
+    def _open(self, root: Path) -> None:
         self.root = root.resolve()
-        self.hub.reset(self.root)  # same Hub object: open SSE connections stay subscribed
-        self.active = None
-        self.approvals = {}
+        self.paths = ProjectPaths(self.root)
+        self.plans = PlanStore(self.paths.plan)
+        self.repo = Repo(self.root)
+        self.active: Guild | None = None  # the Guild of the running job, for /api/cancel
+        self.session = PairSession()  # the running pair turn's permissions
+        self.approvals: dict[str, dict] = {}  # approval requests waiting for the owner
         self.chat_history = self._load_chat()
 
-    # chat survives a restart: .guild/chat.jsonl (inside .guild, so never committed by guild
-    # and not writable by any agent)
-    def _chat_path(self) -> Path:
-        return self.root / GUILD_DIR / "chat.jsonl"
+    def switch(self, root: Path) -> None:
+        self._open(root)
+        self.hub.reset(self.root)  # same Hub object: open SSE connections stay subscribed
+
+    def config(self) -> ProjectConfig:
+        return load_project_config(self.root)
+
+    def workspace(self) -> Workspace:
+        return Workspace(self.root, self.config().ignore)
+
+    def plan(self) -> Plan:
+        plan = self.plans.load()
+        if plan is None:
+            raise HTTPException(404, "no plan")
+        return plan
 
     def _load_chat(self) -> list[dict]:
         items: list[dict] = []
-        try:
-            with open(self._chat_path(), encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    try:
-                        item = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
+        with contextlib.suppress(OSError), open(self.paths.chat, encoding="utf-8") as f:
+            for line in f:
+                with contextlib.suppress(json.JSONDecodeError):
+                    item = json.loads(line)
                     if isinstance(item, dict) and item.get("role") in ("user", "assistant"):
                         items.append(item)
-        except OSError:
-            pass
         return items[-self.CHAT_KEEP :]
 
     def add_chat(self, **entry: Any) -> None:
         entry.setdefault("ts", time.time())
         self.chat_history.append(entry)
-        try:
-            self._chat_path().parent.mkdir(parents=True, exist_ok=True)
-            with open(self._chat_path(), "a", encoding="utf-8") as f:
+        with contextlib.suppress(OSError):  # the history then lives in memory only
+            self.paths.chat.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.paths.chat, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        except OSError:
-            pass  # history stays in memory
 
     def clear_chat(self) -> None:
         self.chat_history = []
         with contextlib.suppress(OSError):
-            self._chat_path().unlink()
+            self.paths.chat.unlink()
 
 
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
-TASK_STATUSES = frozenset({"todo", "in_progress", "done", "blocked"})
 
 
 def _hostname(value: str) -> str:
@@ -295,13 +301,6 @@ def _hostname(value: str) -> str:
     if v.startswith("["):
         return v[1 : v.find("]")] if "]" in v else v
     return v.rsplit(":", 1)[0] if v.count(":") == 1 else v
-
-
-def _write_plan(root: Path, plan: dict) -> None:
-    plan_p = root / GUILD_DIR / "plan.json"
-    tmp = plan_p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(plan, indent=2), encoding="utf-8")
-    os.replace(tmp, plan_p)
 
 
 def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
@@ -318,40 +317,57 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
         if _hostname(request.headers.get("host", "")) not in hosts:
             return JSONResponse({"detail": "guild ui only answers on localhost"}, 403)
         origin = request.headers.get("origin")
-        if origin and request.method not in ("GET", "HEAD", "OPTIONS"):
-            from urllib.parse import urlsplit
-
-            if (urlsplit(origin).hostname or "").lower() not in hosts:
-                return JSONResponse({"detail": "cross-site request refused"}, 403)
+        changes_state = request.method not in ("GET", "HEAD", "OPTIONS")
+        if origin and changes_state and (urlsplit(origin).hostname or "").lower() not in hosts:
+            return JSONResponse({"detail": "cross-site request refused"}, 403)
         return await call_next(request)
 
-    def _busy_with_plan() -> bool:
-        return (
-            S.hub.busy() and S.hub.job is not None and S.hub.job.kind in ("run", "plan", "revise")
-        )
+    @app.exception_handler(UnknownTask)
+    async def _unknown_task(request: Request, e: UnknownTask):
+        return JSONResponse({"detail": str(e)}, 404)
 
-    def _task_or_404(plan: dict | None, task_id: str) -> dict:
-        tasks = (plan or {}).get("tasks", [])
-        task = next((t for t in tasks if isinstance(t, dict) and t.get("id") == task_id), None)
-        if task is None:
-            raise HTTPException(404, f"no task {task_id}")
-        return task
+    @app.exception_handler(PlanError)
+    async def _plan_error(request: Request, e: PlanError):
+        return JSONResponse({"detail": str(e)}, 400)
 
-    def _make_guild(profile_override: str | None):
-        from ..workflow import Guild
+    def _not_while_running(*kinds: str) -> None:
+        job = S.hub.job
+        if S.hub.busy() and (not kinds or job.kind in kinds):
+            raise HTTPException(409, f"a {job.kind} job is running; try again when it ends")
 
-        cfg = load_project_config(S.root)
-        prof = load_profile(profile_override or cfg.profile, S.root)
-        g = Guild(
-            S.root,
-            cfg,
-            prof,
-            report=lambda lvl, msg: S.hub.publish({"kind": "report", "level": lvl, "msg": msg}),
-            on_token=S.hub.token,
-        )
-        g.trace.echo = lambda ev: S.hub.publish(dict(ev))
-        S.active = g
-        return g
+    def _job(
+        kind: str,
+        profile: str | None,
+        work: Callable[[Guild], Any],
+        accepted: Callable[[], None] | None = None,
+    ) -> dict:
+        """Start a background job: `work` gets a Guild wired to the event stream."""
+
+        def run():
+            cfg = S.config()
+            g = Guild(
+                S.root,
+                cfg,
+                load_profile(profile or cfg.profile, S.root),
+                report=lambda lvl, msg: S.hub.publish({"kind": "report", "level": lvl, "msg": msg}),
+                on_token=S.hub.token,
+                on_event=lambda ev: S.hub.publish(dict(ev)),
+            )
+            S.active = g
+            try:
+                return work(g)
+            finally:
+                g.close()
+
+        S.hub.start(kind, run, accepted)
+        return {"ok": True}
+
+    def _branch_task(task_id: str) -> tuple[Plan, Task]:
+        plan = S.plan()
+        (task,) = plan.require(task_id)
+        if not task.branch:
+            raise HTTPException(404, "task has no branch")
+        return plan, task
 
     def _public(entry: dict) -> dict:
         return {k: v for k, v in entry.items() if k not in ("event", "decision")}
@@ -359,8 +375,6 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
     def _approver(req: dict) -> tuple[bool, str]:
         """Called on the job thread before a pair-mode change: publish the request, then wait
         for POST /api/approve/<id> (or a cancel)."""
-        if S.auto_edits and req.get("kind") == "edit":
-            return True, "approved for this turn"
         g = S.active
         entry = {"id": uuid.uuid4().hex[:12], **req, "event": threading.Event(), "decision": None}
         S.approvals[entry["id"]] = entry
@@ -383,24 +397,19 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
     def state():
         # snapshot job status BEFORE reading files, so "not busy" implies the plan is on disk
         busy = S.hub.busy()
-        job = _jsonable(S.hub.job) if S.hub.job else None
-        cfg = load_project_config(S.root)
-        plan = _read_plan(S.root)
-        warnings: list[str] = []
-        if plan:
-            from ..workflow import Plan
-
-            try:
-                warnings = Plan.from_dict(plan).warnings()
-            except (KeyError, TypeError):
-                warnings = []
+        job = jsonable(S.hub.job) if S.hub.job else None
+        try:
+            plan = S.plans.load()
+            warnings = plan.warnings() if plan else []
+        except PlanError as e:
+            plan, warnings = None, [str(e)]
         return {
             "root": str(S.root),
-            "config": cfg.model_dump(),
+            "config": S.config().model_dump(),
             "plan_warnings": warnings,
             "profiles": list_available("profiles", S.root),
             "roles": list_available("roles", S.root),
-            "plan": plan,
+            "plan": plan.to_dict() if plan else None,
             "busy": busy,
             "job": job,
             "pending_approvals": [_public(e) for e in list(S.approvals.values())],
@@ -411,24 +420,19 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
     def project_info():
         return {
             "root": str(S.root),
-            "initialised": (S.root / GUILD_DIR / "config.yaml").exists(),
-            "git": (S.root / ".git").is_dir(),
+            "initialised": S.paths.initialised,
+            "git": S.repo.exists,
             "recent": _recent_projects(),
         }
 
     @app.post("/api/project")
     def project_switch(req: ProjectReq):
-        if S.hub.busy():
-            raise HTTPException(409, "a job is running; wait for it to finish before switching")
+        _not_while_running()
         p = Path(req.path).expanduser()
         if not p.is_dir():
             raise HTTPException(400, f"not a directory: {req.path}")
         S.switch(p)
-        if not (S.root / GUILD_DIR / "config.yaml").exists():
-            # first time here: write a default config (user can run `guild init` for the wizard)
-            from ..hardware import detect_test_command
-
-            save_project_config(S.root, ProjectConfig(test_command=detect_test_command(S.root)))
+        _ensure_config(S.root)
         _remember_project(S.root)
         return project_info()
 
@@ -438,8 +442,6 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
         if not path:
             entries = []
             if os.name == "nt":
-                import string
-
                 for d in string.ascii_uppercase:
                     if Path(f"{d}:\\").exists():
                         entries.append({"name": f"{d}:\\", "path": f"{d}:\\"})
@@ -466,12 +468,12 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
                         {
                             "name": child.name,
                             "path": str(child),
-                            "git": (child / ".git").is_dir(),
-                            "guild": (child / GUILD_DIR).is_dir(),
+                            "git": ProjectPaths(child).has_git,
+                            "guild": ProjectPaths(child).guild_dir.is_dir(),
                         }
                     )
         except PermissionError:
-            pass
+            pass  # a folder the OS will not list: show it as empty rather than fail the picker
         return {
             "path": str(p),
             "parent": str(p.parent) if p.parent != p else None,
@@ -481,43 +483,22 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
     # ---- files -----------------------------------------------------------------------------
     @app.get("/api/files")
     def files():
-        cfg = load_project_config(S.root)
-        from ..tools.registry import ToolContext
-
-        ctx = ToolContext(
-            root=S.root, ignore=cfg.ignore, test_command="", lint_command=None, sandbox=None
-        )
+        ws = S.workspace()
         out = []
-        for dirpath, dirnames, filenames in os.walk(S.root):
-            rel_dir = os.path.relpath(dirpath, S.root)
-            dirnames[:] = sorted(
-                d for d in dirnames if not ctx.is_ignored(os.path.join(rel_dir, d))
-            )
-            for f in sorted(filenames):
-                rel = os.path.normpath(os.path.join(rel_dir, f)).replace("\\", "/")
-                if rel.startswith("./"):
-                    rel = rel[2:]
-                if ctx.is_ignored(rel):
-                    continue
-                try:
-                    size = (Path(dirpath) / f).stat().st_size
-                except OSError:
-                    size = 0
-                out.append({"path": rel, "size": size})
-                if len(out) >= 3000:
-                    return {"root": str(S.root), "files": out, "truncated": True}
-        return {"root": str(S.root), "files": out, "truncated": False}
+        for rel, p in ws.walk(S.root):
+            try:
+                size = p.stat().st_size
+            except OSError:
+                size = 0
+            out.append({"path": rel.replace("\\", "/"), "size": size})
+            if len(out) >= 3000:
+                break
+        return {"root": str(S.root), "files": out, "truncated": len(out) >= 3000}
 
     @app.get("/api/file")
     def file_read(path: str):
-        from ..tools.registry import ToolContext
-
-        cfg = load_project_config(S.root)
-        ctx = ToolContext(
-            root=S.root, ignore=cfg.ignore, test_command="", lint_command=None, sandbox=None
-        )
         try:
-            p = ctx.resolve(path)
+            p = S.workspace().resolve(path)
         except PermissionError as e:
             raise HTTPException(403, str(e)) from e
         if not p.is_file():
@@ -541,54 +522,39 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
 
     @app.post("/api/chat")
     def chat(req: ChatReq):
-        if S.hub.busy():  # before touching the history: a refused message must not linger in it
-            raise HTTPException(409, f"a {S.hub.job.kind} job is already running")
         if not req.message.strip():
             raise HTTPException(400, "empty message")
         history = list(S.chat_history)
-        S.add_chat(role="user", content=req.message)
 
-        def fn():
-            g = _make_guild(req.profile)
-            try:
-                res = g.chat(req.message, history)
-            finally:
-                g.close()
+        def work(g: Guild):
+            res = g.chat(req.message, history)
             S.add_chat(role="assistant", content=res.raw, model=res.model)
             return {"text": res.raw, "model": res.model}
 
-        S.hub.start("chat", fn)
-        return {"ok": True}
+        return _job("chat", req.profile, work, lambda: S.add_chat(role="user", content=req.message))
 
     # ---- pair programming: the chat can change the project, behind an approval gate ----------
     @app.post("/api/pair")
     def pair(req: PairReq):
-        from ..workflow import PAIR_MODES
-
-        if S.hub.busy():
-            raise HTTPException(409, f"a {S.hub.job.kind} job is already running")
         if not req.message.strip():
             raise HTTPException(400, "empty message")
         if req.mode not in PAIR_MODES:
             raise HTTPException(400, f"mode must be one of {list(PAIR_MODES)}")
         history = list(S.chat_history)
-        S.add_chat(role="user", content=req.message, mode=req.mode)
-        S.auto_edits = False
 
-        def fn():
-            g = _make_guild(req.profile)
-            try:
-                res = g.pair(req.message, history, mode=req.mode, approver=_approver)
-            finally:
-                g.close()
-            files = (res.data or {}).get("files_changed", [])
+        def accepted():
+            S.session = PairSession(req.mode)  # "approve all edits" lasts for one turn here
+            S.add_chat(role="user", content=req.message, mode=req.mode)
+
+        def work(g: Guild):
+            res = g.pair(req.message, history, session=S.session, ask=_approver)
+            files = res.data["files_changed"]
             S.add_chat(
                 role="assistant", content=res.raw, model=res.model, mode=req.mode, files=files
             )
             return {"text": res.raw, "model": res.model, "files_changed": files, "mode": req.mode}
 
-        S.hub.start("pair", fn)
-        return {"ok": True}
+        return _job("pair", req.profile, work, accepted)
 
     @app.post("/api/approve/{approval_id}")
     def approve(approval_id: str, req: ApproveReq):
@@ -596,7 +562,7 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
         if entry is None or entry["decision"] is not None:
             raise HTTPException(404, "no such pending approval (already answered or cancelled)")
         if req.approve and req.remember and entry.get("kind") == "edit":
-            S.auto_edits = True
+            S.session.all_edits = True
         entry["decision"] = (req.approve, req.reason.strip()[:300])
         entry["event"].set()
         S.hub.publish({"kind": "approval_resolved", "id": approval_id, "approved": req.approve})
@@ -615,51 +581,20 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
     # ---- plan revision ---------------------------------------------------------------------
     @app.post("/api/plan/revise")
     def plan_revise(req: ReviseReq):
-        def fn():
-            g = _make_guild(req.profile)
-            try:
-                return g.revise_plan(req.instruction)
-            finally:
-                g.close()
-
-        S.hub.start("revise", fn)
-        return {"ok": True}
+        return _job("revise", req.profile, lambda g: g.revise_plan(req.instruction))
 
     @app.get("/api/doctor")
     def doctor(profile: str | None = None):
-        cfg = load_project_config(S.root)
-        prof = load_profile(profile or cfg.profile, S.root)
-        ollama = _ollama_models()
-        rows = []
-        for slot, chain in prof.slots.items():
-            for m in chain:
-                prefix, _, name = m.partition("/")
-                if prefix == "ollama":
-                    if ollama is None:
-                        st, ok = "ollama not reachable", False
-                    elif name in ollama or name.split(":")[0] in {x.split(":")[0] for x in ollama}:
-                        st, ok = "ready", True
-                    else:
-                        st, ok = f"not pulled — ollama pull {name}", False
-                elif prefix == "anthropic":
-                    ok = bool(os.environ.get("ANTHROPIC_API_KEY"))
-                    st = "key set" if ok else "ANTHROPIC_API_KEY missing"
-                elif prefix in ENDPOINTS:
-                    ep = ENDPOINTS[prefix]
-                    ok = (
-                        ep.key_env is None
-                        or bool(os.environ.get(ep.key_env))
-                        or prefix in {"omniroute", "litellm", "custom"}
-                    )
-                    st = "configured" if ok else f"{ep.key_env} missing"
-                else:
-                    st, ok = "unknown provider", False
-                rows.append({"slot": slot, "model": m, "status": st, "ok": ok})
+        prof = load_profile(profile or S.config().profile, S.root)
+        pulled = ollama_models()
         return {
             "profile": prof.model_dump(),
-            "rows": rows,
-            "git": (S.root / ".git").is_dir(),
-            "ollama_models": ollama or [],
+            "rows": [
+                {"slot": m.slot, "model": m.model, "status": m.status, "ok": m.ok}
+                for m in profile_status(prof, pulled)
+            ],
+            "git": S.repo.exists,
+            "ollama_models": pulled or [],
         }
 
     @app.get("/api/roles")
@@ -668,7 +603,7 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
 
     @app.post("/api/config")
     def set_config(req: ConfigReq):
-        cfg = load_project_config(S.root)
+        cfg = S.config()
         if req.profile is not None and req.profile not in list_available("profiles", S.root):
             raise HTTPException(400, f"unknown profile '{req.profile}'")
         unknown = set(req.roles_enabled or ()) - set(list_available("roles", S.root))
@@ -687,169 +622,83 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
 
     @app.post("/api/plan")
     def plan(req: PlanReq):
-        def fn():
-            g = _make_guild(req.profile)
-            try:
-                return g.plan(
-                    req.goal,
-                    extra_context=(f"ADDITIONAL BRIEF:\n{req.context}" if req.context else ""),
-                )
-            finally:
-                g.close()
-
-        S.hub.start("plan", fn)
-        return {"ok": True}
+        brief = f"ADDITIONAL BRIEF:\n{req.context}" if req.context else ""
+        return _job("plan", req.profile, lambda g: g.plan(req.goal, extra_context=brief))
 
     @app.post("/api/run")
     def run(req: RunReq):
-        def fn():
-            g = _make_guild(req.profile)
-            cfg = g.cfg
-            roles_ = [r for r in cfg.roles_enabled if r not in set(req.skip)]
-            try:
-                p = g.load_plan()
-                if p is None:
-                    raise RuntimeError("no plan yet")
-                ids = req.task_ids or ([req.task_id] if req.task_id else None)
-                return g.run_tasks(p, ids, all_tasks=req.all, roles=roles_)
-            finally:
-                g.close()
+        def work(g: Guild):
+            plan = g.plans.load()
+            if plan is None:
+                raise RuntimeError("no plan yet")
+            ids = req.task_ids or ([req.task_id] if req.task_id else None)
+            roles = [r for r in g.cfg.roles_enabled if r not in req.skip]
+            return g.run_tasks(plan, ids, all_tasks=req.all, roles=roles)
 
-        S.hub.start("run", fn)
-        return {"ok": True}
+        return _job("run", req.profile, work)
 
     @app.post("/api/ask")
     def ask(req: AskReq):
-        def fn():
-            g = _make_guild(req.profile)
-            try:
-                return g.ask(req.role, req.question)
-            finally:
-                g.close()
-
-        S.hub.start("ask", fn)
-        return {"ok": True}
+        return _job("ask", req.profile, lambda g: g.ask(req.role, req.question))
 
     @app.post("/api/plan/task")
     def update_task(body: dict):
         """Edit a task's fields or delete it (body: {id, ...fields} or {id, delete: true})."""
-        if _busy_with_plan():
-            # the running job holds the plan in memory and would overwrite this edit (or this
-            # edit would overwrite the task statuses it is saving)
-            raise HTTPException(409, "the plan is in use by a running job; try again when it ends")
-        plan = _read_plan(S.root)
-        if plan is None:
-            raise HTTPException(404, "no plan")
-        tid = body.get("id")
-        task = _task_or_404(plan, tid)
+        # a running job holds the plan in memory: it would overwrite this edit, or this edit
+        # would overwrite the task statuses it saves
+        _not_while_running("run", "plan", "revise")
+        plan = S.plan()
         if body.get("delete"):
-            plan["tasks"] = [t for t in plan["tasks"] if t is not task]
-            for t in plan["tasks"]:  # nothing may keep waiting for a task that is gone
-                if isinstance(t.get("depends_on"), list):
-                    t["depends_on"] = [d for d in t["depends_on"] if d != tid]
+            plan.delete_task(body.get("id"))
         else:
-            ids = {t.get("id") for t in plan["tasks"]}
-            for k in ("title", "description", "done_when"):
-                if k in body:
-                    if not isinstance(body[k], str):
-                        raise HTTPException(400, f"{k} must be a string")
-                    task[k] = body[k]
-            if "status" in body:
-                if body["status"] not in TASK_STATUSES:
-                    raise HTTPException(400, f"status must be one of {sorted(TASK_STATUSES)}")
-                task["status"] = body["status"]
-            for k in ("files", "depends_on"):
-                if k in body:
-                    v = body[k]
-                    if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
-                        raise HTTPException(400, f"{k} must be a list of strings")
-                    task[k] = [d for d in v if d in ids and d != tid] if k == "depends_on" else v
-        _write_plan(S.root, plan)
-        return plan
+            plan.edit_task(body.get("id"), body)
+        S.plans.save(plan)
+        return plan.to_dict()
 
     # ---- branches: review & merge from the dashboard (human decision, guild never auto-merges)
-    def _wf():
-        from ..workflow import Guild
-
-        g = Guild.__new__(Guild)  # git helpers only; no trace/run dir created
-        # no profile needed for git work: a broken profile must not block diff/merge/discard
-        g.root, g.cfg, g.profile, g.dry_run = S.root, load_project_config(S.root), None, False
-        g.report = lambda lvl, msg: None
-        return g
-
     @app.get("/api/branches/{task_id}/diff")
     def branch_diff(task_id: str):
-        task = _task_or_404(_read_plan(S.root), task_id)
-        if not task.get("branch"):
-            raise HTTPException(404, "task has no branch")
-        return _wf().branch_diff(task["branch"], task.get("base"))
+        _, task = _branch_task(task_id)
+        return S.repo.branch_diff(task.branch, task.base)
 
     @app.post("/api/branches/{task_id}/merge")
     def branch_merge(task_id: str):
-        if S.hub.busy():
-            raise HTTPException(409, "a job is running")
-        plan = _read_plan(S.root)
-        task = _task_or_404(plan, task_id)
-        if not task.get("branch"):
-            raise HTTPException(404, "task has no branch")
-        # back into the branch the task started from, not blindly into main/master
-        res = _wf().merge_branch(task["branch"], task.get("base"))
-        if res.get("ok"):
-            task["merged"] = True
-            _write_plan(S.root, plan)
-            S.hub.publish(
-                {
-                    "kind": "report",
-                    "level": "info",
-                    "msg": f"merged {task['branch']} into {res['base']}",
-                }
-            )
+        _not_while_running()
+        plan, task = _branch_task(task_id)
+        res = S.repo.merge_branch(task.branch, task.base)
+        if res["ok"]:
+            plan.branch_merged(task_id)
+            S.plans.save(plan)
+            msg = f"merged {task.branch} into {res['base']}"
+            S.hub.publish({"kind": "report", "level": "info", "msg": msg})
         return res
 
     @app.post("/api/branches/{task_id}/discard")
     def branch_discard(task_id: str):
-        if S.hub.busy():
-            raise HTTPException(409, "a job is running")
-        plan = _read_plan(S.root)
-        task = _task_or_404(plan, task_id)
-        if not task.get("branch"):
-            raise HTTPException(404, "task has no branch")
-        res = _wf().discard_branch(task["branch"])
-        if res.get("ok"):
-            task["branch"] = None
-            task["status"] = "todo"
-            task["merged"] = False
-            _write_plan(S.root, plan)
+        _not_while_running()
+        plan, task = _branch_task(task_id)
+        res = S.repo.discard_branch(task.branch)
+        if res["ok"]:
+            plan.branch_discarded(task_id)
+            S.plans.save(plan)
         return res
 
     @app.get("/api/runs")
     def runs():
         out = []
-
-        def mtime(p: Path) -> float:
+        for p in S.paths.traces()[:50]:
             try:
-                return p.stat().st_mtime
-            except OSError:
-                return 0.0
-
-        paths = sorted((S.root / GUILD_DIR / "runs").glob("*/trace.jsonl"), key=mtime, reverse=True)
-        for p in paths[:50]:
-            try:
-                ev = read_trace(p)
+                events = read_trace(p)
             except OSError:
                 continue  # run folder removed while listing
-            calls = [e for e in ev if e["kind"] == "model_call"]
-            start = next((e for e in ev if e["kind"] == "run_start"), {})
+            totals = summarize(events)
             out.append(
                 {
                     "id": p.parent.name,
-                    "profile": start.get("profile"),
-                    "calls": len(calls),
-                    "input_tokens": sum(e.get("input_tokens") or 0 for e in calls),
-                    "output_tokens": sum(e.get("output_tokens") or 0 for e in calls),
-                    "usd": round(sum(e.get("usd") or 0 for e in calls), 4),
-                    "phases": [e.get("phase") for e in ev if e["kind"] == "phase"][:12],
-                    "ts": ev[0].get("ts", 0) if ev else 0,
+                    **{k: totals[k] for k in ("profile", "calls", "input_tokens", "usd")},
+                    "output_tokens": totals["output_tokens"],
+                    "phases": totals["phases"][:12],
+                    "ts": totals["started"],
                 }
             )
         return out
@@ -858,40 +707,12 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
     def run_detail(run_id: str):
         if "/" in run_id or ".." in run_id or "\\" in run_id:
             raise HTTPException(404)
-        p = S.root / GUILD_DIR / "runs" / run_id / "trace.jsonl"
+        p = S.paths.trace(run_id)
         if not p.exists():
             raise HTTPException(404)
         events = read_trace(p)
-        by_role: dict[str, dict] = {}
-        for e in events:
-            if e["kind"] == "model_call":
-                r = by_role.setdefault(
-                    e.get("role") or "?",
-                    {
-                        "calls": 0,
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "usd": 0.0,
-                        "latency_s": 0.0,
-                        "models": set(),
-                    },
-                )
-                r["calls"] += 1
-                r["input_tokens"] += e.get("input_tokens") or 0
-                r["output_tokens"] += e.get("output_tokens") or 0
-                r["usd"] += e.get("usd") or 0
-                r["latency_s"] += e.get("latency_s") or 0
-                r["models"].add(str(e.get("model")))
-        for r in by_role.values():
-            r["models"] = sorted(r["models"])
-            r["usd"] = round(r["usd"], 5)
-            r["latency_s"] = round(r["latency_s"], 1)
-        return {
-            "events": events,
-            "by_role": by_role,
-            "started": events[0].get("ts", 0) if events else 0,
-            "ended": events[-1].get("ts", 0) if events else 0,
-        }
+        totals = summarize(events)
+        return {"events": events, **{k: totals[k] for k in ("by_role", "started", "ended")}}
 
     @app.get("/api/events")
     def events():
@@ -918,12 +739,9 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
     return app
 
 
-_RECENT = Path.home() / ".guild" / "recent.json"
-
-
 def _recent_projects() -> list[str]:
     try:
-        items = json.loads(_RECENT.read_text(encoding="utf-8"))
+        items = json.loads(ProjectPaths.recent_projects().read_text(encoding="utf-8"))
         return [p for p in items if Path(p).is_dir()][:12]
     except (OSError, ValueError):
         return []
@@ -932,42 +750,24 @@ def _recent_projects() -> list[str]:
 def _remember_project(root: Path) -> None:
     items = [str(root)] + [p for p in _recent_projects() if p != str(root)]
     try:
-        _RECENT.parent.mkdir(parents=True, exist_ok=True)
-        _RECENT.write_text(json.dumps(items[:12]), encoding="utf-8")
+        ProjectPaths.recent_projects().parent.mkdir(parents=True, exist_ok=True)
+        ProjectPaths.recent_projects().write_text(json.dumps(items[:12]), encoding="utf-8")
     except OSError:
         pass
 
 
-def _read_plan(root: Path) -> dict | None:
-    p = root / GUILD_DIR / "plan.json"
-    for _ in range(3):
-        if not p.exists():
-            return None
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            time.sleep(0.05)
-    return None
-
-
-def _ollama_models() -> list[str] | None:
-    import httpx
-
-    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
-    try:
-        r = httpx.get(f"{host}/api/tags", timeout=3)
-        return [m["name"] for m in r.json().get("models", [])]
-    except Exception:
-        return None
+def _ensure_config(root: Path) -> None:
+    """First time in this folder: write a default config (`guild init` is the wizard)."""
+    if not ProjectPaths(root).initialised:
+        save_project_config(root, ProjectConfig(test_command=detect_test_command(root)))
 
 
 def serve(root: Path, port: int = 7331, open_browser: bool = True) -> None:
     import uvicorn
 
-    if not (root / GUILD_DIR / "config.yaml").exists():
-        save_project_config(root, ProjectConfig())
-    _remember_project(root.resolve())
+    _ensure_config(root)
     app = create_app(root)
+    _remember_project(root.resolve())
     url = f"http://127.0.0.1:{port}"
     if open_browser:
         import webbrowser

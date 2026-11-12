@@ -226,8 +226,16 @@ class Controller {
 
   setStatus(status) {
     this.status = status;
-    vscode.commands.executeCommand('setContext', 'guild.state', status);
     this.pushStatus();
+  }
+
+  /** The `when` clauses in package.json (menus, welcome views) read these three keys. */
+  syncContext() {
+    const plan = this.state && this.state.plan;
+    const set = (key, value) => vscode.commands.executeCommand('setContext', key, value);
+    set('guild.state', this.status);
+    set('guild.hasPlan', Boolean(plan && plan.tasks && plan.tasks.length));
+    set('guild.busy', this.busy);
   }
 
   async boot() {
@@ -322,8 +330,6 @@ class Controller {
     this.phase = '';
     this.url = '';
     this.clearApprovals();
-    vscode.commands.executeCommand('setContext', 'guild.hasPlan', false);
-    vscode.commands.executeCommand('setContext', 'guild.busy', false);
     this.plan.refresh();
   }
 
@@ -349,12 +355,7 @@ class Controller {
   /** Stop the running job. The server stops it at the next safe point; a task goes back to todo. */
   async cancelJob() {
     if (!this.client || !this.busy) return;
-    try {
-      await this.client.post('/api/cancel', {});
-    } catch (e) {
-      if (e.status !== 404 && e.status !== 405) throw e;
-      await this.restart(); // an older guild without /api/cancel: restarting is the only way
-    }
+    await this.client.post('/api/cancel', {});
   }
 
   init() {
@@ -401,8 +402,6 @@ class Controller {
       if (!pending.some((r) => r.id === id)) this.dropApproval(id);
     }
     const plan = state.plan;
-    vscode.commands.executeCommand('setContext', 'guild.hasPlan', Boolean(plan && plan.tasks && plan.tasks.length));
-    vscode.commands.executeCommand('setContext', 'guild.busy', this.busy);
     const warnings = state.plan_warnings || [];
     this.tree.message = plan
       ? `${plan.goal || ''}${warnings.length ? `  —  ⚠ ${warnings.length} plan warning(s), hover a task or see the log` : ''}`
@@ -422,7 +421,9 @@ class Controller {
     }, 150);
   }
 
+  /** Show the current state everywhere it appears: menus, status bar, chat view. */
   pushStatus() {
+    this.syncContext();
     const running = this.status === 'running';
     let text;
     if (!running) {
@@ -443,7 +444,7 @@ class Controller {
   onEvent(ev, replayed) {
     const line = fmt.eventLine(ev);
     if (line) {
-      this.channel.appendLine(line);
+      this.channel.appendLine(line.text);
       this.chatView.log(line);
     }
     switch (ev.kind) {
@@ -538,7 +539,6 @@ class Controller {
   async job(apiPath, body) {
     await this.need().post(apiPath, body);
     this.busy = true;
-    vscode.commands.executeCommand('setContext', 'guild.busy', true);
     this.pushStatus();
   }
 

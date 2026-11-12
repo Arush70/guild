@@ -9,15 +9,14 @@ So users can override anything by dropping a YAML file into .guild/ without fork
 
 from __future__ import annotations
 
-import os
 from importlib import resources
 from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-GUILD_DIR = ".guild"
+from .paths import CACHE_DIRS, PROTECTED_DIRS, ProjectPaths
 
 
 class Limits(BaseModel):
@@ -55,10 +54,21 @@ class Role(BaseModel):
     escalation_slot: str | None = None
     tools: list[str] = Field(default_factory=list)
     max_tool_calls: int = 30
+    # True: the tool budget is the profile's limits.max_tool_calls_per_task instead (the role
+    # that implements tasks; cheap profiles give it less, strong ones more)
+    task_budget: bool | None = None
     write_allowlist: list[str] | None = None
     readonly: bool | None = None  # None = infer from tools/name (reviewers are read-only)
     description: str = ""
     system_prompt: str
+
+    @model_validator(mode="after")
+    def _engineer_has_the_task_budget(self) -> Role:
+        # role files written before `task_budget` existed (a project's own engineer.yaml) do
+        # not have the line; the engineer always had the task budget
+        if self.task_budget is None:
+            self.task_budget = self.name == "engineer"
+        return self
 
 
 class ProjectConfig(BaseModel):
@@ -74,16 +84,14 @@ class ProjectConfig(BaseModel):
     docker_image: str = "python:3.11-slim"
     ignore: list[str] = Field(
         default_factory=lambda: [
-            ".git",
-            ".guild",
+            *sorted(PROTECTED_DIRS),
             "node_modules",
             ".venv",
             "venv",
-            "__pycache__",
+            *CACHE_DIRS,
             "*.pyc",
             "dist",
             "build",
-            ".mypy_cache",
         ]
     )
     roles_enabled: list[str] = Field(
@@ -93,8 +101,8 @@ class ProjectConfig(BaseModel):
     @field_validator("sandbox", mode="before")
     @classmethod
     def _sandbox(cls, v: object) -> object:
-        # A typo ("dockr") used to fall back to the local sandbox silently, i.e. run untrusted
-        # code on the host while the config claimed isolation.
+        # A typo ("dockr") must never quietly mean "local": that runs untrusted code on the
+        # host while the config claims isolation.
         if isinstance(v, str):
             v = v.strip().lower()
         if v not in {"local", "docker"}:
@@ -123,7 +131,7 @@ def _find(kind: str, name: str, project: Path | None) -> Path:
         raise FileNotFoundError(f"invalid {kind[:-1]} name: {name!r}")
     candidates: list[Path] = []
     if project is not None:
-        candidates.append(project / GUILD_DIR / kind / f"{name}.yaml")
+        candidates.append(ProjectPaths(project).overrides(kind) / f"{name}.yaml")
     candidates.append(_package_data(kind) / f"{name}.yaml")
     for c in candidates:
         if c.exists():
@@ -143,23 +151,23 @@ def load_role(name: str, project: Path | None = None) -> Role:
 
 def list_available(kind: str, project: Path | None = None) -> list[str]:
     names: set[str] = set()
-    for d in ([project / GUILD_DIR / kind] if project else []) + [_package_data(kind)]:
+    own = [ProjectPaths(project).overrides(kind)] if project else []
+    for d in [*own, _package_data(kind)]:
         if d.exists():
             names.update(p.stem for p in d.glob("*.yaml"))
     return sorted(names)
 
 
 def load_project_config(project: Path) -> ProjectConfig:
-    path = project / GUILD_DIR / "config.yaml"
+    path = ProjectPaths(project).config
     if not path.exists():
         return ProjectConfig()
     return ProjectConfig.model_validate(_load_yaml(path))
 
 
 def save_project_config(project: Path, cfg: ProjectConfig) -> Path:
-    d = project / GUILD_DIR
-    d.mkdir(parents=True, exist_ok=True)
-    path = d / "config.yaml"
+    path = ProjectPaths(project).config
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(cfg.model_dump(), f, sort_keys=False)
     return path
@@ -169,13 +177,7 @@ def find_project_root(start: Path | None = None) -> Path:
     """Walk up until a directory containing .guild/ or .git/ is found; else cwd."""
     p = (start or Path.cwd()).resolve()
     for cand in [p, *p.parents]:
-        if (cand / GUILD_DIR).is_dir() or (cand / ".git").is_dir():
+        paths = ProjectPaths(cand)
+        if paths.guild_dir.is_dir() or paths.has_git:
             return cand
     return p
-
-
-def env_flag(name: str, default: bool = False) -> bool:
-    v = os.environ.get(name)
-    if v is None:
-        return default
-    return v.strip().lower() in {"1", "true", "yes", "on"}

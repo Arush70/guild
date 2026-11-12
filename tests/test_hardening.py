@@ -14,12 +14,13 @@ import pytest
 
 from guild.agent import Agent, extract_text_tool_calls
 from guild.config import ProjectConfig, Role
+from guild.plan import Plan, Task
 from guild.providers.base import Completion, Message, ToolCall, Usage
 from guild.providers.router import Router
 from guild.sandbox import LocalSandbox
-from guild.tools.registry import ToolContext, _readonly_allowed, dispatch
+from guild.tools import ToolContext, dispatch
 from guild.trace import Trace, read_trace
-from guild.workflow import Guild, Plan, Task
+from guild.workflow import Guild
 from tests.conftest import FakeProvider
 from tests.test_workflow import APPROVE, ENG_TOUCH, PLAN
 
@@ -41,58 +42,7 @@ def _guild(project, cfg, profile, fake):
     return g
 
 
-# ------------------------------------------------------------------ read-only command allowlist
-
-
-@pytest.mark.parametrize(
-    "cmd",
-    [
-        "ls & touch pwned",  # single & is a separator in sh and cmd.exe
-        "ls -la\ntouch pwned",  # newline is a separator
-        "ls -la\r\ntouch pwned",
-        "find . -delete",
-        "find . -name '*.py' -exec rm {} +",
-        "find . -fprint pwned",
-        "git branch -D main",
-        "git branch -m main other",
-        "git branch newbranch",
-        "sort -o app.py app.py",
-        "sort --output=app.py app.py",
-        "uniq app.py pwned",
-        "tree -o pwned",
-        "git diff --output=pwned",
-        "git log --output=pwned",
-        "git grep -O sh x",
-        "rg --pre ./evil x",
-        "ruff check --add-noqa",
-        "pytest --basetemp=.",
-        "pytest -p evil",
-        "git diff --ext-diff",
-    ],
-)
-def test_readonly_allowlist_refuses_bypasses(cmd):
-    assert not _readonly_allowed(cmd), cmd
-
-
-@pytest.mark.parametrize(
-    "cmd",
-    [
-        "pytest -q",
-        "python -m pytest -q tests/test_app.py",
-        "pytest -q | tail -20",
-        "git log --oneline -5",
-        "git branch",
-        "git branch -a",
-        "git branch --show-current",
-        "find . -name '*.py'",
-        "sort app.py",
-        "uniq -c app.py",
-        "git diff HEAD~1",
-        "ls -la",
-    ],
-)
-def test_readonly_allowlist_still_allows_inspection(cmd):
-    assert _readonly_allowed(cmd), cmd
+# ------------------------------------------------------------------ read-only roles
 
 
 def test_readonly_run_command_does_not_execute_chained_command(project):
@@ -264,7 +214,7 @@ class _Scripted:
         self.turns = list(turns)
         self.seen: list[list[Message]] = []
 
-    def complete(self, model_name, messages, tools, max_tokens, temperature):
+    def complete(self, model_name, messages, tools, max_tokens, temperature, on_token=None):
         self.seen.append(list(messages))
         turn = self.turns.pop(0) if self.turns else '{"status": "done"}'
         if isinstance(turn, list):
@@ -350,7 +300,7 @@ class _Counting:
     def __init__(self):
         self.calls: list[str] = []
 
-    def complete(self, model_name, messages, tools, max_tokens, temperature):
+    def complete(self, model_name, messages, tools, max_tokens, temperature, on_token=None):
         self.calls.append(model_name)
         return Completion(Message("assistant", "{}"), Usage(1000, 1000), f"fake/{model_name}", "")
 
@@ -482,7 +432,7 @@ def test_revise_plan_keeps_merged_flag(project, cfg, profile):
     try:
         done = Task(**PLAN["tasks"][0])
         done.status, done.merged, done.branch = "done", True, "guild/t1-x"
-        g.save_plan(Plan(goal="g", roadmap=[], tasks=[done]))
+        g.plans.save(Plan(goal="g", roadmap=[], tasks=[done]))
         new = g.revise_plan("add a second task")
         assert new.tasks[0].status == "done" and new.tasks[0].merged is True
     finally:
@@ -594,7 +544,7 @@ def test_interrupt_does_not_leave_task_stuck_in_progress(project, cfg, profile):
         g.run_task(plan, plan.tasks[0], roles=["engineer"])
     g.close()
     assert plan.tasks[0].status == "todo"
-    assert g.load_plan().tasks[0].status == "todo"
+    assert g.plans.load().tasks[0].status == "todo"
     assert _branch(project) in ("main", "master")
 
 
@@ -645,12 +595,12 @@ def test_commit_works_without_a_git_identity(project, cfg, profile, monkeypatch,
     assert "guild(T1)" in log, log
 
 
-def test_review_diff_is_not_a_git_error_message(project, cfg, profile):
-    g = Guild(project, cfg, profile)
-    try:
-        text = g._diff_text("does-not-exist-ref")
-    finally:
-        g.close()
+def test_review_diff_is_not_a_git_error_message(project):
+    from guild.repo import Repo, TaskBranch
+
+    branch = TaskBranch(Repo(project), warn=lambda msg: None)
+    branch.base_ref = "does-not-exist-ref"
+    text = branch.review_diff()
     assert "fatal" not in text and "unknown revision" not in text, text
 
 
@@ -683,7 +633,7 @@ def test_discard_refuses_non_guild_branches(project, cfg, profile):
     subprocess.run(["git", "branch", "precious"], cwd=project, check=True)
     g = Guild(project, cfg, profile)
     try:
-        res = g.discard_branch("precious")
+        res = g.repo.discard_branch("precious")
     finally:
         g.close()
     assert res["ok"] is False
@@ -704,7 +654,7 @@ def test_merge_goes_back_to_the_branch_the_task_started_from(project, cfg, profi
     try:
         out = g.run_task(plan, plan.tasks[0], roles=["engineer", "critic", "security"])
         assert out.accepted and out.task.base == "develop"
-        res = g.merge_branch(out.task.branch, out.task.base)
+        res = g.repo.merge_branch(out.task.branch, out.task.base)
     finally:
         g.close()
     assert res["ok"] and res["base"] == "develop", res

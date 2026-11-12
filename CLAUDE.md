@@ -35,8 +35,14 @@ shares its JSONL trace discipline with his dissertation project (MACS) but is a 
 ```
 src/guild/
   cli.py              typer commands: init(wizard) doctor plan status run pair review ask cost roles watch ui
-  workflow.py         Guild class: plan(), revise_plan(), run_task(), run_tasks(), verify(), ask(), chat(),
-                      pair() (interactive turn behind ToolContext.approver, ADR-016), cancel()
+  workflow.py         Guild class: plan(), revise_plan(), run_task(), run_tasks() (the only task loop),
+                      ask(), chat(), pair() (PairSession: mode + approvals, ADR-016), cancel()
+  plan.py             Task / Plan / PlanStore: everything that reads or changes .guild/plan.json
+  repo.py             Repo (every git command) and TaskBranch (git state of one task run)
+  verify.py           Verifier → Verification: run tests + lint, detect removed tests
+  paths.py            ProjectPaths: every path under .guild/; PROTECTED_DIRS, CACHE_DIRS; atomic_write_text
+  projectdocs.py      the project documents roles read, and their `guild init --docs` templates
+  errors.py           Cancelled
   agent.py            one role's tool-calling loop; extract_json; extract_text_tool_calls;
                       validates the final reply against schemas.py and asks for repairs (≤2)
   schemas.py          pydantic output contract per role/job (lenient coercions for small models)
@@ -44,9 +50,12 @@ src/guild/
   config.py           Profile / Role / ProjectConfig models + loaders (.guild/ overrides win)
   trace.py            JSONL trace writer/reader (.guild/runs/<id>/trace.jsonl)
   sandbox.py          LocalSandbox / DockerSandbox; secrets stripped from env
-  tools/registry.py   file/search/shell/git/web tools, scoped to project root
+  tools/registry.py   file/search/shell/git/web tools; dispatch() → ToolResult(.ok)
+  tools/context.py    Workspace (root scoping + ignore rules), ToolContext (+ a role's permissions)
+  tools/policy.py     security policy: read-only command allowlist, secret files, blocked URLs
   providers/          openai_compat (Ollama, Groq, Gemini, DeepSeek, OpenRouter, OmniRoute,
-                      LiteLLM…), anthropic_provider, router (fallback chain + cost tracking)
+                      LiteLLM…), anthropic_provider, router (fallback chain + cost tracking),
+                      status (is a model usable: key set / pulled — for doctor, dashboard, init)
   ui/server.py        FastAPI + SSE hub (events + throttled token stream); switchable project (_State);
                       /api/fs folder picker, /api/files + /api/file browser, /api/chat, /api/plan/revise;
                       branch diff/merge/discard; run detail with per-role cost.  ui/index.html  single-file dashboard, no build step
@@ -56,10 +65,12 @@ src/guild/
 vscode-extension/     VS Code front end (ADR-014): extension.js + lib/{client,server,format}.js +
                       media/ (chat webview). No deps, no build. `npm test` (needs `guild` installed),
                       `npm run package` → .vsix. Talks only to the dashboard HTTP API.
-tests/                193 tests; FakeProvider in conftest.py scripts model replies, no API calls;
+tests/                229 tests; FakeProvider in conftest.py scripts model replies, no API calls;
                       test_robustness.py (schemas/repair/streaming), test_hardware.py (init wizard),
                       test_hardening*.py (2026-11-12 break-it audit: every test is an attack that worked),
-                      test_pair.py (approval gate, modes, cancel, /api/pair, `guild pair`)
+                      test_pair.py (approval gate, modes, cancel, /api/pair, `guild pair`),
+                      test_policy.py (command/URL policy), test_modules.py (plan, repo, verify, paths…),
+                      test_same_behaviour.py (differences the untangle review caught)
 ```
 
 ## Conventions

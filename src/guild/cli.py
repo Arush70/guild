@@ -3,19 +3,21 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
+import time
 from pathlib import Path
 
 import typer
+import yaml
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
+from rich.syntax import Syntax
 from rich.table import Table
 
-from . import __version__
+from . import __version__, projectdocs
+from . import hardware as hwmod
 from .config import (
-    GUILD_DIR,
     ProjectConfig,
     find_project_root,
     list_available,
@@ -24,8 +26,14 @@ from .config import (
     load_role,
     save_project_config,
 )
-from .providers import AllProvidersFailed, BudgetExceeded, Cancelled
-from .providers.openai_compat import ENDPOINTS
+from .errors import Cancelled
+from .paths import CACHE_DIRS, ProjectPaths
+from .plan import Plan, PlanError, PlanStore, Task
+from .providers import AllProvidersFailed, BudgetExceeded
+from .providers.status import ollama_models, profile_status
+from .repo import Repo
+from .trace import read_trace, summarize
+from .workflow import PAIR_MODES, REVIEWERS, Guild, PairSession, TaskOutcome
 
 app = typer.Typer(
     help="A budget-aware multi-agent coding team.", no_args_is_help=True, rich_markup_mode="rich"
@@ -35,12 +43,18 @@ err = Console(stderr=True)
 
 
 def _report(level: str, msg: str) -> None:
-    style = {"phase": "bold cyan", "warn": "yellow", "info": "dim", "error": "bold red"}.get(
+    style = {"phase": "bold cyan", "warn": "yellow", "fallback": "yellow", "info": "dim"}.get(
         level,
         "dim",  # an empty style would print "[]…[/]" and raise a rich MarkupError
     )
-    prefix = {"phase": "▶", "warn": "!", "info": "·", "error": "✖"}.get(level, "·")
+    prefix = {"phase": "▶", "warn": "!", "fallback": "!"}.get(level, "·")
     console.print(f"[{style}]{prefix} {escape(msg)}[/{style}]")  # model text may contain [..]
+
+
+def _reason(e: Exception) -> str:
+    """One line for the user; a pydantic error otherwise prints a paragraph and a URL."""
+    errors = getattr(e, "errors", None)
+    return errors()[0]["msg"] if callable(errors) else str(e)
 
 
 def _load(project: Path | None, profile_override: str | None):
@@ -51,15 +65,36 @@ def _load(project: Path | None, profile_override: str | None):
             cfg.profile = profile_override
         profile = load_profile(cfg.profile, root)
     except (FileNotFoundError, ValueError) as e:  # ValueError: invalid YAML / invalid values
-        err.print(f"[red]{escape(str(e))}[/red]")
+        err.print(f"[red]{escape(_reason(e))}[/red]")
         raise typer.Exit(2) from None
     return root, cfg, profile
 
 
-def _guild(root, cfg, profile, dry_run: bool = False):
-    from .workflow import Guild
+def _guild(root, cfg, profile, **kw) -> Guild:
+    return Guild(root, cfg, profile, report=_report, **kw)
 
-    return Guild(root, cfg, profile, report=_report, dry_run=dry_run)
+
+def _load_plan(root: Path) -> Plan | None:
+    try:
+        return PlanStore(ProjectPaths(root).plan).load()
+    except PlanError as e:
+        err.print(f"[red]{escape(str(e))}[/red]")
+        raise typer.Exit(2) from None
+
+
+def _review_lines(name: str, review: dict | None, fallback: str = "") -> list[str]:
+    """A reviewer's verdict, summary and first findings. All of it is model text: escaped so
+    "[high]" or "[/x]" is shown as written instead of being read as rich markup."""
+    review = review or {}
+    colour = {"approve": "green", "request_changes": "yellow", "block": "red"}.get(
+        review.get("verdict"), "white"
+    )
+    summary = escape(str(review.get("summary") or fallback)[:200])
+    lines = [f"[{colour}]{name}: {review.get('verdict', '?')}[/{colour}] — {summary}"]
+    for f in review.get("findings", [])[:8]:
+        sev, file, issue = (escape(str(f.get(k) or "")) for k in ("severity", "file", "issue"))
+        lines.append(f"   \\[{sev}] {file}: {issue}")
+    return lines
 
 
 def _cost_table(tracker) -> Table:
@@ -100,6 +135,76 @@ def _main(
         console.print(ctx.get_help())
 
 
+def _choose_tier(hw: hwmod.Hardware, yes: bool) -> str:
+    default = "lite" if hw.keys.get("anthropic") else "free"
+    if yes:
+        return default
+    free_cloud = " + your free cloud keys" if hw.keys.get("groq") or hw.keys.get("gemini") else ""
+    console.print(
+        f"[bold]Which profile?[/bold]\n  [cyan]free[/cyan]  £0 — local Ollama models{free_cloud}"
+        "\n  [cyan]lite[/cyan]  ~£10–20/mo — Claude plans & reviews, local model codes "
+        "(needs ANTHROPIC_API_KEY)"
+        "\n  [cyan]pro[/cyan]   pay-as-you-go — best model everywhere "
+        "(needs Anthropic/OpenAI/Gemini keys)"
+    )
+    return typer.prompt("profile", default=default).strip().lower()
+
+
+def _existing_config(root: Path) -> ProjectConfig:
+    """Re-running init must not wipe settings edited by hand (ignore list, lint_command,
+    roles_enabled, docker_image): start from the existing config when there is a valid one."""
+    try:
+        return load_project_config(root)
+    except ValueError:
+        return ProjectConfig()
+
+
+def _init_repo(root: Path, yes: bool) -> None:
+    """guild needs a repository with at least one commit: it branches from HEAD."""
+    if Repo(root).exists:
+        return
+    if not yes and not typer.confirm(
+        "This folder is not a git repository. Initialise one? (needed for branches)", default=True
+    ):
+        return
+    repo = Repo.init(root)
+    if repo is None:
+        return
+    console.print("[green]initialised git repository (branch main)[/green]")
+    _ensure_gitignore(root)
+    first = repo.commit_all("initial commit (guild init)")
+    if first.committed:
+        console.print("[green]created initial commit[/green]")
+        if first.warning:
+            console.print(f"[yellow]{escape(first.warning)}[/yellow]")
+    else:
+        console.print(
+            "[yellow]could not create the initial commit "
+            "(then: git add -A && git commit -m init)[/yellow]"
+        )
+
+
+def _init_summary(hw: hwmod.Hardware, profile: dict, config_path: Path, profile_path: Path) -> str:
+    slots = profile["slots"]
+    pulls = hwmod.missing_pulls(slots, hw)
+    lines = [f"config:  {config_path}", f"profile: [bold]{profile['name']}[/bold] → {profile_path}"]
+    lines.append("")
+    for slot, chain in slots.items():
+        then = f"  (then {', '.join(chain[1:3])})" if len(chain) > 1 else ""
+        lines.append(f"  {slot:<17} {chain[0]}{then}")
+    if pulls:
+        lines += ["", "Pull the local models first:"]
+        lines += [f"  ollama pull {m}" for m in pulls[:3]]
+    if not hw.git:
+        lines += ["", "[yellow]git is not installed — guild needs it to make branches.[/yellow]"]
+    lines += [
+        "",
+        "Next: [bold]guild doctor[/bold], then [bold]guild ui[/bold] "
+        'or [bold]guild plan "..."[/bold]',
+    ]
+    return "\n".join(lines)
+
+
 @app.command()
 def init(
     path: Path = typer.Argument(Path("."), help="project directory"),
@@ -120,108 +225,47 @@ def init(
     """Set up guild for a project: detects your hardware, keys and test runner, picks models
     that fit, and writes .guild/config.yaml plus a tailored profile. Optionally scaffolds the
     project documents every role reads for context."""
-    import yaml
-
-    from . import hardware as hwmod
-
     root = path.resolve()
     root.mkdir(parents=True, exist_ok=True)
     console.print(Panel("\n".join(hwmod.summary_lines(hw := hwmod.detect())), title="your machine"))
 
-    # -- tier
-    if profile is None:
-        if yes:
-            profile = "lite" if hw.keys.get("anthropic") else "free"
-        else:
-            console.print(
-                "[bold]Which profile?[/bold]\n  [cyan]free[/cyan]  £0 — local Ollama models"
-                + (
-                    " + your free cloud keys"
-                    if hw.keys.get("groq") or hw.keys.get("gemini")
-                    else ""
-                )
-                + "\n  [cyan]lite[/cyan]  ~£10–20/mo — Claude plans & reviews, local model codes "
-                "(needs ANTHROPIC_API_KEY)"
-                "\n  [cyan]pro[/cyan]   pay-as-you-go — best model everywhere "
-                "(needs Anthropic/OpenAI/Gemini keys)"
-            )
-            default = "lite" if hw.keys.get("anthropic") else "free"
-            profile = typer.prompt("profile", default=default).strip().lower()
-    if profile not in {"free", "lite", "pro"}:
-        err.print(f"[red]unknown profile '{profile}'[/red]")
-        raise typer.Exit(2)
+    profile = profile or _choose_tier(hw, yes)
+    try:
+        prof = hwmod.build_profile(hw, profile)
+        cfg = _existing_config(root)
+        cfg.profile, cfg.sandbox = profile, sandbox
+    except ValueError as e:  # unknown profile tier or sandbox kind
+        err.print(f"[red]{escape(_reason(e))}[/red]")
+        raise typer.Exit(2) from None
     if profile in {"lite", "pro"} and not hw.keys.get("anthropic"):
         console.print(
             "[yellow]note: ANTHROPIC_API_KEY is not set — Claude seats will fall back to other "
             "candidates until you set it.[/yellow]"
         )
 
-    # -- test command
     detected = hwmod.detect_test_command(root)
     if test_command is None:
         test_command = detected if yes else typer.prompt("test command", default=detected)
 
-    # -- sandbox
-    sandbox = sandbox.strip().lower()
-    if sandbox not in {"local", "docker"}:
-        err.print(f"[red]unknown sandbox '{escape(sandbox)}' (use local or docker)[/red]")
-        raise typer.Exit(2)
-    if sandbox == "docker" and not hw.docker:
+    if cfg.sandbox == "docker" and not hw.docker:
         console.print("[yellow]docker not found; using local sandbox[/yellow]")
-        sandbox = "local"
+        cfg.sandbox = "local"
 
-    # -- git: guild needs a repo for branches/merge
-    if hw.git and not (root / ".git").is_dir():
-        do_init = yes or typer.confirm(
-            "This folder is not a git repository. Initialise one? (needed for branches)",
-            default=True,
-        )
-        if do_init:
-            import subprocess
+    if hw.git:
+        _init_repo(root, yes)
 
-            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=False)
-            if (root / ".git").is_dir():
-                console.print("[green]initialised git repository (branch main)[/green]")
-                _ensure_gitignore(root)
-                # guild branches from HEAD; an unborn HEAD means no branches and no commits
-                subprocess.run(["git", "add", "-A"], cwd=root, check=False)
-                r = subprocess.run(
-                    ["git", "commit", "-q", "-m", "initial commit (guild init)"],
-                    cwd=root,
-                    check=False,
-                    capture_output=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-                if r.returncode == 0:
-                    console.print("[green]created initial commit[/green]")
-                else:
-                    console.print(
-                        "[yellow]could not create the initial commit "
-                        "(set git user.name/user.email, then: git add -A && git commit -m init)"
-                        "[/yellow]"
-                    )
-
-    # -- write config + tailored profile
-    # re-running init must not wipe settings edited by hand (ignore list, lint_command,
-    # roles_enabled, docker_image): start from the existing config when there is a valid one
-    try:
-        cfg = load_project_config(root)
-    except ValueError:
-        cfg = ProjectConfig()
-    cfg.profile, cfg.test_command, cfg.sandbox = profile, test_command, sandbox
-    p = save_project_config(root, cfg)
-    for sub in ("roles", "profiles", "runs"):
-        (root / GUILD_DIR / sub).mkdir(parents=True, exist_ok=True)
-    prof = hwmod.build_profile(hw, profile)
-    prof_path = root / GUILD_DIR / "profiles" / f"{profile}.yaml"
+    cfg.test_command = test_command
+    config_path = save_project_config(root, cfg)
+    paths = ProjectPaths(root)
+    for d in (paths.overrides("roles"), paths.overrides("profiles"), paths.runs):
+        d.mkdir(parents=True, exist_ok=True)
+    prof_path = paths.overrides("profiles") / f"{profile}.yaml"
     prof_path.write_text(
         "# Generated by `guild init` for this machine. Edit freely; this overrides the "
         "built-in profile.\n" + yaml.safe_dump(prof, sort_keys=False),
         encoding="utf-8",
     )
 
-    # -- project docs (PRD / architecture / rules / tasks / memory / decisions)
     if docs is None and not yes:
         docs = typer.confirm(
             "Scaffold project docs (PRD, ARCHITECTURE, RULES, TASKS, MEMORY, DECISIONS)? "
@@ -229,75 +273,21 @@ def init(
             default=not (root / "docs" / "PRD.md").exists(),
         )
     if docs:
-        created = _scaffold_docs(root)
+        created = projectdocs.scaffold(root)
         if created:
             console.print(
                 "[green]created:[/green] " + ", ".join(created) + "  — fill in PRD.md first"
             )
 
     _ensure_gitignore(root)
-
-    # -- what to pull
-    pulls = (
-        hwmod.missing_pulls(prof["slots"], hw)
-        if hw.ollama_reachable
-        else [
-            m.split("/", 1)[1]
-            for chain in prof["slots"].values()
-            for m in chain
-            if m.startswith("ollama/")
-        ]
-    )
-    pulls = list(dict.fromkeys(pulls))[:3]
-    lines = [f"config:  {p}", f"profile: [bold]{profile}[/bold] → {prof_path}", ""]
-    for slot, chain in prof["slots"].items():
-        lines.append(
-            f"  {slot:<17} {chain[0]}"
-            + (f"  (then {', '.join(chain[1:3])})" if len(chain) > 1 else "")
-        )
-    if pulls:
-        lines += ["", "Pull the local models first:"] + [f"  ollama pull {m}" for m in pulls]
-    if not hw.git:
-        lines += ["", "[yellow]git is not installed — guild needs it to make branches.[/yellow]"]
-    lines += [
-        "",
-        "Next: [bold]guild doctor[/bold], then [bold]guild ui[/bold] "
-        'or [bold]guild plan "..."[/bold]',
-    ]
-    console.print(Panel("\n".join(lines), title="guild init"))
-
-
-def _scaffold_docs(root: Path) -> list[str]:
-    """Copy doc templates into the project without overwriting anything that exists."""
-    from importlib import resources
-
-    tdir = resources.files("guild").joinpath("data", "templates")
-    targets = {
-        "PRD.md": "docs/PRD.md",
-        "ARCHITECTURE.md": "docs/ARCHITECTURE.md",
-        "MEMORY.md": "docs/MEMORY.md",
-        "DECISIONS.md": "docs/DECISIONS.md",
-        "RULES.md": "RULES.md",
-        "TASKS.md": "TASKS.md",
-    }
-    created: list[str] = []
-    for src, rel in targets.items():
-        dst = root / rel
-        if dst.exists():
-            continue
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_text(tdir.joinpath(src).read_text(encoding="utf-8"), encoding="utf-8")
-        created.append(rel)
-    return created
+    console.print(Panel(_init_summary(hw, prof, config_path, prof_path), title="guild init"))
 
 
 _GITIGNORE_LINES = (
-    ("# guild run traces (may contain code excerpts)", f"{GUILD_DIR}/runs/"),
-    ("# caches guild's test runs create", "__pycache__/"),
+    ("# guild run traces (may contain code excerpts)", f"{ProjectPaths(Path()).runs.as_posix()}/"),
+    ("# caches guild's test runs create", f"{CACHE_DIRS[0]}/"),
     (None, "*.pyc"),
-    (None, ".pytest_cache/"),
-    (None, ".ruff_cache/"),
-    (None, ".mypy_cache/"),
+    *((None, f"{d}/") for d in CACHE_DIRS[1:]),
 )
 
 
@@ -327,8 +317,6 @@ def doctor(
 ):
     """Check which providers in the active profile are reachable / configured."""
     root, cfg, prof = _load(project, profile)
-    from . import hardware as hwmod
-
     hw = hwmod.detect()
     console.print(f"project: {root}\nprofile: [bold]{prof.name}[/bold] — {prof.description}\n")
     console.print(Panel("\n".join(hwmod.summary_lines(hw)), title="machine"))
@@ -336,38 +324,15 @@ def doctor(
     t.add_column("slot")
     t.add_column("candidate")
     t.add_column("status")
-    ollama_ok = _ollama_models()
-    for slot, chain in prof.slots.items():
-        for i, m in enumerate(chain):
-            prefix, _, name = m.partition("/")
-            if prefix == "ollama":
-                if ollama_ok is None:
-                    status = "[red]ollama not reachable[/red]"
-                elif name in ollama_ok or name.split(":")[0] in {
-                    x.split(":")[0] for x in ollama_ok
-                }:
-                    status = "[green]ready[/green]"
-                else:
-                    status = f"[yellow]not pulled[/yellow] → ollama pull {name}"
-            elif prefix == "anthropic":
-                status = (
-                    "[green]key set[/green]"
-                    if os.environ.get("ANTHROPIC_API_KEY")
-                    else "[dim]ANTHROPIC_API_KEY missing[/dim]"
-                )
-            elif prefix in ENDPOINTS:
-                ep = ENDPOINTS[prefix]
-                if (
-                    ep.key_env is None
-                    or os.environ.get(ep.key_env)
-                    or prefix in {"omniroute", "litellm", "custom"}
-                ):
-                    status = "[green]configured[/green]"
-                else:
-                    status = f"[dim]{ep.key_env} missing[/dim]"
-            else:
-                status = "[red]unknown provider[/red]"
-            t.add_row(slot if i == 0 else "", m, status)
+    colour = {"ready": "green", "missing": "yellow", "broken": "red"}
+    last_slot = None
+    for m in profile_status(prof, ollama_models()):
+        t.add_row(
+            "" if m.slot == last_slot else m.slot,
+            m.model,
+            f"[{colour[m.level]}]{escape(m.status)}[/{colour[m.level]}]",
+        )
+        last_slot = m.slot
     console.print(t)
     rec = hwmod.recommend_local(hw)
     console.print(
@@ -387,20 +352,9 @@ def doctor(
             else "  [red](docker not found)[/red]"
         )
     )
-    has_git = (root / ".git").is_dir()
+    has_git = Repo(root).exists
     console.print(f"git: {'yes' if has_git else '[yellow]no — branches/commits disabled[/yellow]'}")
     console.print(f"test command: {cfg.test_command}")
-
-
-def _ollama_models() -> list[str] | None:
-    import httpx
-
-    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
-    try:
-        r = httpx.get(f"{host}/api/tags", timeout=3)
-        return [m["name"] for m in r.json().get("models", [])]
-    except Exception:
-        return None
 
 
 @app.command()
@@ -419,16 +373,16 @@ def plan(
     try:
         p = g.plan(goal, extra_context=(f"ADDITIONAL BRIEF:\n{extra}" if extra else ""))
     except (AllProvidersFailed, BudgetExceeded, RuntimeError) as e:
-        err.print(f"[red]{e}[/red]")
-        g.close()
+        err.print(f"[red]{escape(str(e))}[/red]")
         raise typer.Exit(1) from None
-    g.close()
+    finally:
+        g.close()
     _show_plan(p)
     console.print(_cost_table(g.tracker))
     console.print(f"\ntrace: {g.trace.path}")
 
 
-def _show_plan(p) -> None:
+def _show_plan(p: Plan) -> None:
     console.print(
         Panel(
             "\n".join(f"{i + 1}. {escape(str(m))}" for i, m in enumerate(p.roadmap)) or "(none)",
@@ -479,13 +433,11 @@ def _show_plan(p) -> None:
 def status(project: Path | None = typer.Option(None, "--project", "-C")):
     """Show the current plan and task statuses."""
     root, _cfg, _prof = _load(project, None)
-    from .workflow import Plan
-
-    p = root / GUILD_DIR / "plan.json"
-    if not p.exists():
+    plan_ = _load_plan(root)
+    if plan_ is None:
         console.print('no plan yet — run [bold]guild plan "..."[/bold]')
         raise typer.Exit()
-    _show_plan(Plan.from_dict(json.loads(p.read_text(encoding="utf-8"))))
+    _show_plan(plan_)
 
 
 @app.command()
@@ -501,79 +453,54 @@ def run(
 ):
     """Implement task(s) from the plan: engineer → verify → critic/security → lead → docs."""
     root, cfg, prof = _load(project, profile)
-    g = _guild(root, cfg, prof)
-    try:
-        plan_ = g.load_plan()
-    except (ValueError, KeyError, TypeError) as e:
-        g.close()
-        err.print(f"[red].guild/plan.json is not readable: {escape(str(e))}[/red]")
-        raise typer.Exit(2) from None
+    plan_ = _load_plan(root)
     if plan_ is None:
-        g.close()
         err.print("no plan — run `guild plan` first")
         raise typer.Exit(2)
-    known = [t.id for t in plan_.tasks]
-    unknown = [t for t in (task_ids or []) if t not in known]
-    if unknown:
-        g.close()
-        err.print(
-            f"[red]no task {escape(', '.join(unknown))} in the plan[/red] "
-            f"(tasks: {escape(', '.join(known))})"
-        )
-        raise typer.Exit(2)
-    roles = [
-        r for r in cfg.roles_enabled if r not in {s.strip() for s in skip.split(",") if s.strip()}
-    ]
-
     try:
-        queue_ = list(task_ids or [])
-        while True:
-            if queue_:
-                task = plan_.get(queue_.pop(0))
-                if task.status == "done":
-                    continue
-            else:
-                task = None if task_ids else plan_.next_task()
-            if task is None:
-                console.print("[green]no runnable tasks left[/green]")
-                break
-            waiting = plan_.unmet_dependencies(task)
-            if waiting:
-                console.print(
-                    f"[yellow]skipping {escape(task.id)}: depends on {escape(', '.join(waiting))} "
-                    "which is not done yet[/yellow]"
-                )
-                if queue_:
-                    continue
-                break
-            console.print(
-                Panel(
-                    f"[bold]{escape(task.id)}[/bold] {escape(task.title)}\n"
-                    f"{escape(task.description)}\n\n"
-                    f"[dim]done when:[/dim] {escape(task.done_when)}",
-                    title="task",
-                )
+        plan_.require(*(task_ids or []))
+    except PlanError as e:
+        err.print(f"[red]{escape(str(e))}[/red]")
+        raise typer.Exit(2) from None
+    skipped = {s.strip() for s in skip.split(",")}
+    ask_first = not (yes or all_tasks or task_ids)
+
+    offered: list[str] = []
+
+    def before(task: Task) -> bool:
+        offered.append(task.id)
+        console.print(
+            Panel(
+                f"[bold]{escape(task.id)}[/bold] {escape(task.title)}\n"
+                f"{escape(task.description)}\n\n"
+                f"[dim]done when:[/dim] {escape(task.done_when)}",
+                title="task",
             )
-            if (
-                not yes
-                and not all_tasks
-                and not task_ids
-                and not typer.confirm("Run this task?", default=True)
-            ):
-                break
-            out = g.run_task(plan_, task, roles=roles)
-            _show_outcome(out)
-            if not out.accepted:
-                console.print("[yellow]stopping: task not accepted[/yellow]")
-                break
-            if not queue_ and not all_tasks:
-                break
-            if (
-                not yes
-                and not queue_
-                and not typer.confirm("Continue with next task?", default=True)
-            ):
-                break
+        )
+        return not ask_first or typer.confirm("Run this task?", default=True)
+
+    def after(out: TaskOutcome) -> bool:
+        _show_outcome(out)
+        if not out.accepted:
+            console.print("[yellow]stopping: task not accepted[/yellow]")
+            return False
+        more = all_tasks and plan_.next_task() is not None
+        return not more or yes or typer.confirm("Continue with next task?", default=True)
+
+    g = _guild(root, cfg, prof)
+    try:
+        outcomes = g.run_tasks(
+            plan_,
+            task_ids,
+            all_tasks=all_tasks,
+            roles=[r for r in cfg.roles_enabled if r not in skipped],
+            stop_on_failure=True,
+            before=before,
+            after=after,
+        )
+        ran_out = all_tasks and outcomes and outcomes[-1].accepted and not plan_.next_task()
+        if not offered or ran_out:
+            console.print("[green]no runnable tasks left[/green]")
     except (AllProvidersFailed, BudgetExceeded) as e:
         err.print(f"[red]{escape(str(e))}[/red]")
     except KeyboardInterrupt:
@@ -584,7 +511,7 @@ def run(
     console.print(f"\ntrace: {g.trace.path}")
 
 
-def _show_outcome(out) -> None:
+def _show_outcome(out: TaskOutcome) -> None:
     colour = "green" if out.accepted else "yellow"
     lines = [
         f"[{colour}]{'ACCEPTED' if out.accepted else 'NOT ACCEPTED'}[/{colour}]  "
@@ -594,17 +521,9 @@ def _show_outcome(out) -> None:
         lines.append(f"branch: {escape(out.task.branch)}   (review and merge it yourself)")
     if out.verification:
         v = out.verification
-        status = "pass" if v.get("passed") else "FAIL"
-        lines.append(f"tests: {status} ({v.get('tests_run', '?')} run)")
-    for label, rev in (("critic", out.critic), ("security", out.security)):
-        if rev:
-            summary = escape(str(rev.get("summary") or "")[:200])
-            lines.append(f"{label}: {rev.get('verdict')} — {summary}")
-            for f in rev.get("findings", [])[:8]:
-                sev, file, issue = (
-                    escape(str(f.get(k) or "")) for k in ("severity", "file", "issue")
-                )
-                lines.append(f"   \\[{sev}] {file}: {issue}")
+        lines.append(f"tests: {'pass' if v.passed else 'FAIL'} ({v.tests_run} run)")
+    for role, review in out.reviews.items():
+        lines += _review_lines(role, review)
     if out.lead_decision:
         ld = out.lead_decision
         lines.append(f"lead: {ld.get('decision')} — {escape(str(ld.get('notes') or '')[:300])}")
@@ -628,13 +547,14 @@ def ask(
     try:
         res = g.ask(role, question)
     except (AllProvidersFailed, BudgetExceeded, FileNotFoundError) as e:
-        err.print(f"[red]{e}[/red]")
-        g.close()
+        err.print(f"[red]{escape(str(e))}[/red]")
         raise typer.Exit(1) from None
-    g.close()
+    finally:
+        g.close()
     console.print(
         Panel(
-            json.dumps(res.data, indent=2) if res.data else res.raw, title=f"{role} ({res.model})"
+            escape(json.dumps(res.data, indent=2) if res.data else res.raw),
+            title=f"{role} ({res.model})",
         )
     )
     console.print(_cost_table(g.tracker))
@@ -660,28 +580,21 @@ def pair(
 ):
     """Pair-program in the terminal: chat with an agent that reads, edits and runs commands in
     your working tree, asking before every change. No branch, no commit: you are the reviewer."""
-    from rich.syntax import Syntax
-
-    from .workflow import PAIR_MODES
-
-    if mode not in PAIR_MODES:
-        err.print(f"[red]unknown mode '{escape(mode)}' (use {', '.join(PAIR_MODES)})[/red]")
-        raise typer.Exit(2)
+    try:
+        session = PairSession(mode)
+    except ValueError as e:
+        err.print(f"[red]{escape(str(e))}[/red]")
+        raise typer.Exit(2) from None
     root, cfg, prof = _load(project, profile)
-    from .workflow import Guild
-
     streamed = {"any": False}
 
     def on_token(role: str, chunk: str) -> None:
         streamed["any"] = True
         console.print(chunk, end="", markup=False, highlight=False, soft_wrap=True)
 
-    g = Guild(root, cfg, prof, report=_report, on_token=on_token)
-    session = {"mode": mode, "all_edits": False}
+    g = _guild(root, cfg, prof, on_token=on_token)
 
-    def approver(req: dict) -> tuple[bool, str]:
-        if req.get("kind") == "edit" and session["all_edits"]:
-            return True, "approved for this session"
+    def ask_owner(req: dict) -> tuple[bool, str]:
         console.print()
         if req.get("kind") == "edit":
             title = f"{'create' if req.get('new_file') else 'edit'} {req.get('path')}"
@@ -695,7 +608,7 @@ def pair(
         except EOFError:
             answer = "n"
         if answer in ("a", "all") and req.get("kind") == "edit":
-            session["all_edits"] = True
+            session.all_edits = True
             return True, ""
         if answer in ("y", "yes"):
             return True, ""
@@ -703,7 +616,7 @@ def pair(
 
     console.print(
         f"[bold]guild pair[/bold] · {escape(str(root))} · profile {escape(prof.name)} · "
-        f"mode {session['mode']}   [dim](/help for commands)[/dim]"
+        f"mode {session.mode}   [dim](/help for commands)[/dim]"
     )
     history: list[dict] = []
     pending = message
@@ -728,16 +641,13 @@ def pair(
                 console.print("[dim]conversation cleared[/dim]")
                 continue
             if text.startswith("/mode"):
-                new = text[5:].strip()
-                if new in PAIR_MODES:
-                    session["mode"], session["all_edits"] = new, False
-                console.print(
-                    f"[dim]mode: {session['mode']} (choices: {', '.join(PAIR_MODES)})[/dim]"
-                )
+                if text[5:].strip() in PAIR_MODES:
+                    session.mode = text[5:].strip()
+                console.print(f"[dim]mode: {session.mode} (choices: {', '.join(PAIR_MODES)})[/dim]")
                 continue
             streamed["any"] = False
             try:
-                res = g.pair(text, history, mode=session["mode"], approver=approver)
+                res = g.pair(text, history, session=session, ask=ask_owner)
             except (KeyboardInterrupt, Cancelled):
                 console.print("\n[yellow]turn cancelled[/yellow]")
                 continue
@@ -750,7 +660,7 @@ def pair(
                 console.print()
             else:
                 console.print(res.raw, markup=False, highlight=False)
-            files = (res.data or {}).get("files_changed") or []
+            files = res.data["files_changed"]
             if files:
                 console.print(f"[dim]changed: {escape(', '.join(files))}[/dim]")
             history += [
@@ -774,34 +684,28 @@ def review(
 ):
     """Run Critic and Security on the current diff without implementing anything."""
     root, cfg, prof = _load(project, profile)
+    diff = None if ref.startswith("-") else Repo(root).diff(ref)
+    if diff is None:
+        err.print(f"[red]cannot diff against {escape(ref)}: not a branch, tag or commit[/red]")
+        raise typer.Exit(2)
+    reviewers = ["security"] if security_only else list(REVIEWERS)
     g = _guild(root, cfg, prof)
-    if ref.startswith("-"):
-        g.close()
-        err.print("[red]--ref must be a branch, tag or commit[/red]")
-        raise typer.Exit(2)
-    rc, diff = g._git_rc("diff", "--no-ext-diff", ref, "--")
-    if rc != 0:
-        g.close()
-        err.print(f"[red]git diff {escape(ref)} failed: {escape(diff[:300])}[/red]")
-        raise typer.Exit(2)
-    diff = diff or "(no diff)"
-    ctx = {"Diff": diff[:30000]}
     try:
-        results = {}
-        if not security_only:
-            results["critic"] = g.agent("critic").run("Review the change.", context_blocks=ctx)
-        results["security"] = g.agent("security").run(
-            "Review the change for security and privacy.", context_blocks=ctx
-        )
+        results = {
+            r: g.agent(r).run(
+                REVIEWERS[r][1], context_blocks={"Diff": (diff or "(no diff)")[:30000]}
+            )
+            for r in reviewers
+        }
     except (AllProvidersFailed, BudgetExceeded) as e:
-        err.print(f"[red]{e}[/red]")
-        g.close()
+        err.print(f"[red]{escape(str(e))}[/red]")
         raise typer.Exit(1) from None
-    g.close()
+    finally:
+        g.close()
     for name, res in results.items():
         console.print(
             Panel(
-                json.dumps(res.data, indent=2) if res.data else res.raw,
+                escape(json.dumps(res.data, indent=2) if res.data else res.raw),
                 title=f"{name} ({res.model})",
             )
         )
@@ -814,10 +718,7 @@ def cost(
     last: int = typer.Option(10, help="how many runs to summarise"),
 ):
     """Summarise token usage and estimated cost from saved traces."""
-    from .trace import read_trace
-
-    root = find_project_root(project)
-    runs = sorted((root / GUILD_DIR / "runs").glob("*/trace.jsonl"))[-last:]
+    runs = list(reversed(ProjectPaths(find_project_root(project)).traces()[:last]))
     if not runs:
         console.print("no runs yet")
         raise typer.Exit()
@@ -830,18 +731,15 @@ def cost(
     t.add_column("USD", justify="right")
     grand = 0.0
     for p in runs:
-        ev = read_trace(p)
-        prof = next((e.get("profile") for e in ev if e["kind"] == "run_start"), "?")
-        calls = [e for e in ev if e["kind"] == "model_call"]
-        usd = sum(e.get("usd", 0) for e in calls)
-        grand += usd
+        totals = summarize(read_trace(p))
+        grand += totals["usd"]
         t.add_row(
             p.parent.name,
-            prof,
-            str(len(calls)),
-            f"{sum(e['input_tokens'] for e in calls):,}",
-            f"{sum(e['output_tokens'] for e in calls):,}",
-            f"{usd:.4f}",
+            totals["profile"] or "?",
+            str(totals["calls"]),
+            f"{totals['input_tokens']:,}",
+            f"{totals['output_tokens']:,}",
+            f"{totals['usd']:.4f}",
         )
     console.print(t)
     console.print(f"estimated total: ${grand:.4f}  (≈ £{grand * 0.78:.2f})")
@@ -888,52 +786,27 @@ def watch(
     once: bool = typer.Option(False, help="review the current HEAD once and exit"),
 ):
     """Watch the repo; every new commit gets reviewed by the Critic and Security roles."""
-    import subprocess
-    import time as _time
-
     root, cfg, prof = _load(project, profile)
     reviewers = [r.strip() for r in roles.split(",") if r.strip()]
-
-    def head() -> str:
-        r = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=root,
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        return r.stdout.strip()
+    repo = Repo(root)
 
     def review(sha: str) -> None:
-        g = _guild(root, cfg, prof)
-        diff = (
-            g._git("show", "--format=%h %s%n", sha, "--", ".", f":(exclude){GUILD_DIR}")
-            or "(empty)"
-        )
+        diff = repo.show(sha) or "(empty)"
         console.rule(f"[cyan]{sha[:8]}")
+        g = _guild(root, cfg, prof)
         try:
             for r in reviewers:
                 res = g.agent(r).run(
                     "Review this commit.", context_blocks={"Commit diff": diff[:30000]}
                 )
-                d = res.data or {}
-                colour = {"approve": "green", "request_changes": "yellow", "block": "red"}.get(
-                    d.get("verdict"), "white"
-                )
-                summary = escape(str(d.get("summary") or res.raw[:200]))
-                console.print(f"[{colour}]{r}: {d.get('verdict', '?')}[/{colour}] — {summary}")
-                for f in d.get("findings", [])[:8]:
-                    # model text: "[high]" would be read as rich markup and vanish or crash
-                    sev, file, issue = (
-                        escape(str(f.get(k) or "")) for k in ("severity", "file", "issue")
-                    )
-                    console.print(f"   \\[{sev}] {file}: {issue}")
+                for line in _review_lines(r, res.data, fallback=res.raw):
+                    console.print(line)
         except (AllProvidersFailed, BudgetExceeded) as e:
-            err.print(f"[red]{e}[/red]")
+            err.print(f"[red]{escape(str(e))}[/red]")
         finally:
             g.close()
 
-    last = head()
+    last = repo.head()
     if not last:
         err.print("not a git repository")
         raise typer.Exit(2)
@@ -945,8 +818,8 @@ def watch(
     )
     try:
         while True:
-            _time.sleep(interval)
-            cur = head()
+            time.sleep(interval)
+            cur = repo.head()
             if cur and cur != last:
                 last = cur
                 review(cur)

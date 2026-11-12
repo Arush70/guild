@@ -4,6 +4,7 @@ slot: coder
 escalation_slot: coder_escalation
 tools: [read_file, write_file, edit_file, list_files, search, run_command, run_tests, git_status, git_diff]
 max_tool_calls: 60
+task_budget: true   # the profile's limits.max_tool_calls_per_task applies instead
 description: >
   Implements one task at a time on a branch, writes tests alongside code, runs them, and
   reports what changed. Escalates to a stronger model after repeated verification failures.
