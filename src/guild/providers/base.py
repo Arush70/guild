@@ -53,6 +53,13 @@ class Completion:
     stop_reason: str = ""
 
 
+class Cancelled(BaseException):
+    """The owner cancelled the running job (dashboard / VS Code "stop", Ctrl+C in `guild pair`).
+
+    A BaseException on purpose: provider adapters and tools catch `Exception` to turn failures
+    into fallbacks or tool errors, and a cancel must pass straight through all of them."""
+
+
 class ProviderError(Exception):
     """Raised when a provider cannot serve a request (network, auth, 429, 5xx...)."""
 
@@ -76,7 +83,7 @@ def parse_json_args(raw: Any) -> dict[str, Any]:
     if not raw:
         return {}
     try:
-        v = json.loads(raw)
+        v = json.loads(raw, strict=False)  # raw newlines inside strings are common
         return v if isinstance(v, dict) else {"value": v}
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         return {"_raw": str(raw)}

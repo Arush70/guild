@@ -24,7 +24,7 @@ from .config import (
     load_role,
     save_project_config,
 )
-from .providers import AllProvidersFailed, BudgetExceeded
+from .providers import AllProvidersFailed, BudgetExceeded, Cancelled
 from .providers.openai_compat import ENDPOINTS
 
 app = typer.Typer(
@@ -36,21 +36,22 @@ err = Console(stderr=True)
 
 def _report(level: str, msg: str) -> None:
     style = {"phase": "bold cyan", "warn": "yellow", "info": "dim", "error": "bold red"}.get(
-        level, ""
+        level,
+        "dim",  # an empty style would print "[]…[/]" and raise a rich MarkupError
     )
-    prefix = {"phase": "▶", "warn": "!", "info": "·", "error": "✖"}.get(level, "")
+    prefix = {"phase": "▶", "warn": "!", "info": "·", "error": "✖"}.get(level, "·")
     console.print(f"[{style}]{prefix} {escape(msg)}[/{style}]")  # model text may contain [..]
 
 
 def _load(project: Path | None, profile_override: str | None):
     root = find_project_root(project)
-    cfg = load_project_config(root)
-    if profile_override:
-        cfg.profile = profile_override
     try:
+        cfg = load_project_config(root)
+        if profile_override:
+            cfg.profile = profile_override
         profile = load_profile(cfg.profile, root)
-    except FileNotFoundError as e:
-        err.print(f"[red]{e}[/red]")
+    except (FileNotFoundError, ValueError) as e:  # ValueError: invalid YAML / invalid values
+        err.print(f"[red]{escape(str(e))}[/red]")
         raise typer.Exit(2) from None
     return root, cfg, profile
 
@@ -161,6 +162,10 @@ def init(
         test_command = detected if yes else typer.prompt("test command", default=detected)
 
     # -- sandbox
+    sandbox = sandbox.strip().lower()
+    if sandbox not in {"local", "docker"}:
+        err.print(f"[red]unknown sandbox '{escape(sandbox)}' (use local or docker)[/red]")
+        raise typer.Exit(2)
     if sandbox == "docker" and not hw.docker:
         console.print("[yellow]docker not found; using local sandbox[/yellow]")
         sandbox = "local"
@@ -198,7 +203,13 @@ def init(
                     )
 
     # -- write config + tailored profile
-    cfg = ProjectConfig(profile=profile, test_command=test_command, sandbox=sandbox)
+    # re-running init must not wipe settings edited by hand (ignore list, lint_command,
+    # roles_enabled, docker_image): start from the existing config when there is a valid one
+    try:
+        cfg = load_project_config(root)
+    except ValueError:
+        cfg = ProjectConfig()
+    cfg.profile, cfg.test_command, cfg.sandbox = profile, test_command, sandbox
     p = save_project_config(root, cfg)
     for sub in ("roles", "profiles", "runs"):
         (root / GUILD_DIR / sub).mkdir(parents=True, exist_ok=True)
@@ -420,7 +431,8 @@ def plan(
 def _show_plan(p) -> None:
     console.print(
         Panel(
-            "\n".join(f"{i + 1}. {m}" for i, m in enumerate(p.roadmap)) or "(none)", title="Roadmap"
+            "\n".join(f"{i + 1}. {escape(str(m))}" for i, m in enumerate(p.roadmap)) or "(none)",
+            title="Roadmap",
         )
     )
     t = Table(title="Tasks")
@@ -430,18 +442,33 @@ def _show_plan(p) -> None:
     t.add_column("done when")
     t.add_column("deps")
     for task in p.tasks:
-        t.add_row(task.id, task.status, task.title, task.done_when, ",".join(task.depends_on))
+        t.add_row(
+            *(
+                escape(str(c))
+                for c in (
+                    task.id,
+                    task.status,
+                    task.title,
+                    task.done_when,
+                    ",".join(task.depends_on),
+                )
+            )
+        )
     console.print(t)
     if p.warnings():
         console.print(
-            Panel("\n".join(f"- {w}" for w in p.warnings()), title="Plan check", style="yellow")
+            Panel(
+                "\n".join(f"- {escape(w)}" for w in p.warnings()),
+                title="Plan check",
+                style="yellow",
+            )
         )
     if p.risks:
-        console.print(Panel("\n".join(f"- {r}" for r in p.risks), title="Risks"))
+        console.print(Panel("\n".join(f"- {escape(str(r))}" for r in p.risks), title="Risks"))
     if p.questions_for_owner:
         console.print(
             Panel(
-                "\n".join(f"- {q}" for q in p.questions_for_owner),
+                "\n".join(f"- {escape(str(q))}" for q in p.questions_for_owner),
                 title="Questions for you",
                 style="yellow",
             )
@@ -475,9 +502,24 @@ def run(
     """Implement task(s) from the plan: engineer → verify → critic/security → lead → docs."""
     root, cfg, prof = _load(project, profile)
     g = _guild(root, cfg, prof)
-    plan_ = g.load_plan()
+    try:
+        plan_ = g.load_plan()
+    except (ValueError, KeyError, TypeError) as e:
+        g.close()
+        err.print(f"[red].guild/plan.json is not readable: {escape(str(e))}[/red]")
+        raise typer.Exit(2) from None
     if plan_ is None:
+        g.close()
         err.print("no plan — run `guild plan` first")
+        raise typer.Exit(2)
+    known = [t.id for t in plan_.tasks]
+    unknown = [t for t in (task_ids or []) if t not in known]
+    if unknown:
+        g.close()
+        err.print(
+            f"[red]no task {escape(', '.join(unknown))} in the plan[/red] "
+            f"(tasks: {escape(', '.join(known))})"
+        )
         raise typer.Exit(2)
     roles = [
         r for r in cfg.roles_enabled if r not in {s.strip() for s in skip.split(",") if s.strip()}
@@ -495,10 +537,20 @@ def run(
             if task is None:
                 console.print("[green]no runnable tasks left[/green]")
                 break
+            waiting = plan_.unmet_dependencies(task)
+            if waiting:
+                console.print(
+                    f"[yellow]skipping {escape(task.id)}: depends on {escape(', '.join(waiting))} "
+                    "which is not done yet[/yellow]"
+                )
+                if queue_:
+                    continue
+                break
             console.print(
                 Panel(
-                    f"[bold]{task.id}[/bold] {task.title}\n{task.description}\n\n"
-                    f"[dim]done when:[/dim] {task.done_when}",
+                    f"[bold]{escape(task.id)}[/bold] {escape(task.title)}\n"
+                    f"{escape(task.description)}\n\n"
+                    f"[dim]done when:[/dim] {escape(task.done_when)}",
                     title="task",
                 )
             )
@@ -523,9 +575,9 @@ def run(
             ):
                 break
     except (AllProvidersFailed, BudgetExceeded) as e:
-        err.print(f"[red]{e}[/red]")
+        err.print(f"[red]{escape(str(e))}[/red]")
     except KeyboardInterrupt:
-        err.print("[yellow]interrupted[/yellow]")
+        err.print("[yellow]interrupted — the task is back to 'todo'; run it again[/yellow]")
     finally:
         g.close()
     console.print(_cost_table(g.tracker))
@@ -588,6 +640,131 @@ def ask(
     console.print(_cost_table(g.tracker))
 
 
+_PAIR_HELP = (
+    "[dim]/mode ask | auto-edits | plan   change what needs your approval\n"
+    "/clear                          forget the conversation\n"
+    "/exit                           leave (also Ctrl+D)\n"
+    "Ctrl+C                          cancel the current turn[/dim]"
+)
+
+
+@app.command()
+def pair(
+    message: str | None = typer.Argument(None, help="first request (omit to just start chatting)"),
+    project: Path | None = typer.Option(None, "--project", "-C"),
+    profile: str | None = typer.Option(None, "--profile", "-p"),
+    mode: str = typer.Option(
+        "ask", "--mode", "-m", help="ask (approve everything) | auto-edits | plan (read-only)"
+    ),
+    once: bool = typer.Option(False, "--once", help="answer the first request and exit"),
+):
+    """Pair-program in the terminal: chat with an agent that reads, edits and runs commands in
+    your working tree, asking before every change. No branch, no commit: you are the reviewer."""
+    from rich.syntax import Syntax
+
+    from .workflow import PAIR_MODES
+
+    if mode not in PAIR_MODES:
+        err.print(f"[red]unknown mode '{escape(mode)}' (use {', '.join(PAIR_MODES)})[/red]")
+        raise typer.Exit(2)
+    root, cfg, prof = _load(project, profile)
+    from .workflow import Guild
+
+    streamed = {"any": False}
+
+    def on_token(role: str, chunk: str) -> None:
+        streamed["any"] = True
+        console.print(chunk, end="", markup=False, highlight=False, soft_wrap=True)
+
+    g = Guild(root, cfg, prof, report=_report, on_token=on_token)
+    session = {"mode": mode, "all_edits": False}
+
+    def approver(req: dict) -> tuple[bool, str]:
+        if req.get("kind") == "edit" and session["all_edits"]:
+            return True, "approved for this session"
+        console.print()
+        if req.get("kind") == "edit":
+            title = f"{'create' if req.get('new_file') else 'edit'} {req.get('path')}"
+            console.print(Panel(Syntax(req.get("preview") or "", "diff"), title=escape(title)))
+            choices = "\\[y]es / \\[n]o / \\[a]ll edits this session"
+        else:
+            console.print(Panel(escape(str(req.get("command"))), title="run command"))
+            choices = "\\[y]es / \\[n]o"
+        try:
+            answer = console.input(f"[bold]apply?[/bold] {choices} › ").strip().lower()
+        except EOFError:
+            answer = "n"
+        if answer in ("a", "all") and req.get("kind") == "edit":
+            session["all_edits"] = True
+            return True, ""
+        if answer in ("y", "yes"):
+            return True, ""
+        return False, "" if answer in ("n", "no", "") else answer  # anything else is feedback
+
+    console.print(
+        f"[bold]guild pair[/bold] · {escape(str(root))} · profile {escape(prof.name)} · "
+        f"mode {session['mode']}   [dim](/help for commands)[/dim]"
+    )
+    history: list[dict] = []
+    pending = message
+    try:
+        while True:
+            if pending is None:
+                try:
+                    text = console.input("\n[bold cyan]you ›[/bold cyan] ").strip()
+                except EOFError:
+                    break
+            else:
+                text, pending = pending.strip(), None
+            if not text:
+                continue
+            if text in ("/exit", "/quit"):
+                break
+            if text == "/help":
+                console.print(_PAIR_HELP)
+                continue
+            if text == "/clear":
+                history.clear()
+                console.print("[dim]conversation cleared[/dim]")
+                continue
+            if text.startswith("/mode"):
+                new = text[5:].strip()
+                if new in PAIR_MODES:
+                    session["mode"], session["all_edits"] = new, False
+                console.print(
+                    f"[dim]mode: {session['mode']} (choices: {', '.join(PAIR_MODES)})[/dim]"
+                )
+                continue
+            streamed["any"] = False
+            try:
+                res = g.pair(text, history, mode=session["mode"], approver=approver)
+            except (KeyboardInterrupt, Cancelled):
+                console.print("\n[yellow]turn cancelled[/yellow]")
+                continue
+            except (AllProvidersFailed, BudgetExceeded) as e:
+                err.print(f"[red]{escape(str(e))}[/red]")
+                if once:
+                    raise typer.Exit(1) from None
+                continue
+            if streamed["any"]:
+                console.print()
+            else:
+                console.print(res.raw, markup=False, highlight=False)
+            files = (res.data or {}).get("files_changed") or []
+            if files:
+                console.print(f"[dim]changed: {escape(', '.join(files))}[/dim]")
+            history += [
+                {"role": "user", "content": text},
+                {"role": "assistant", "content": res.raw},
+            ]
+            if once:
+                break
+    finally:
+        g.close()
+    console.print(_cost_table(g.tracker))
+    console.print(f"\ntrace: {g.trace.path}")
+
+
 @app.command()
 def review(
     project: Path | None = typer.Option(None, "--project", "-C"),
@@ -598,7 +775,16 @@ def review(
     """Run Critic and Security on the current diff without implementing anything."""
     root, cfg, prof = _load(project, profile)
     g = _guild(root, cfg, prof)
-    diff = g._git("diff", ref) or g._git("diff") or "(no diff)"
+    if ref.startswith("-"):
+        g.close()
+        err.print("[red]--ref must be a branch, tag or commit[/red]")
+        raise typer.Exit(2)
+    rc, diff = g._git_rc("diff", "--no-ext-diff", ref, "--")
+    if rc != 0:
+        g.close()
+        err.print(f"[red]git diff {escape(ref)} failed: {escape(diff[:300])}[/red]")
+        raise typer.Exit(2)
+    diff = diff or "(no diff)"
     ctx = {"Diff": diff[:30000]}
     try:
         results = {}
@@ -734,10 +920,14 @@ def watch(
                 colour = {"approve": "green", "request_changes": "yellow", "block": "red"}.get(
                     d.get("verdict"), "white"
                 )
-                summary = d.get("summary", res.raw[:200])
+                summary = escape(str(d.get("summary") or res.raw[:200]))
                 console.print(f"[{colour}]{r}: {d.get('verdict', '?')}[/{colour}] — {summary}")
                 for f in d.get("findings", [])[:8]:
-                    console.print(f"   [{f.get('severity')}] {f.get('file')}: {f.get('issue')}")
+                    # model text: "[high]" would be read as rich markup and vanish or crash
+                    sev, file, issue = (
+                        escape(str(f.get(k) or "")) for k in ("severity", "file", "issue")
+                    )
+                    console.print(f"   \\[{sev}] {file}: {issue}")
         except (AllProvidersFailed, BudgetExceeded) as e:
             err.print(f"[red]{e}[/red]")
         finally:

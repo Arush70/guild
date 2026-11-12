@@ -47,7 +47,7 @@ def client(project, cfg, profile, monkeypatch):
 
     monkeypatch.setattr(router_mod.Router, "_provider_for", patched)
     app = server.create_app(project)
-    return TestClient(app)
+    return TestClient(app, base_url="http://127.0.0.1:7331")
 
 
 def _wait(client, kind, timeout=20):

@@ -122,7 +122,7 @@
       <div id="tab-chat" class="grow" style="min-height:0">
         <div class="scroll chat" id="chatLog" style="flex:1;min-height:120px"></div>
         <textarea id="chatQ" rows="2" placeholder="Ask about the code, the plan, what the team did… (Enter to send, Shift+Enter for newline)" style="margin-top:8px"></textarea>
-        <div class="row" style="margin-top:6px"><button class="primary" id="btnChat">send</button><button id="btnChatClear" class="small">clear</button></div>
+        <div class="row" style="margin-top:6px"><button class="primary" id="btnChat">send</button><select id="chatMode" title="chat only reads. pair can change files and run commands, asking you first."><option value="chat">chat (read-only)</option><option value="ask">pair: ask before every change</option><option value="auto-edits">pair: apply edits, ask for commands</option><option value="plan">pair: plan only</option></select><button id="btnCancel" class="small hidden" title="stop the running job">stop</button><button id="btnChatClear" class="small">clear</button></div>
       </div>
       <div id="tab-files" class="grow hidden" style="min-height:0">
         <input id="fileFilter" placeholder="filter files…" style="width:100%;margin-bottom:6px">
@@ -195,7 +195,7 @@ const api = async (path, body) => {
   if (!r.ok) { const t = await r.text(); throw new Error(t.slice(0, 300)); }
   return r.json();
 };
-const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ROLES = ['lead','engineer','verifier','critic','security','docs','researcher','assistant'];
 let state = null, agentStats = {};
 
@@ -229,7 +229,7 @@ function renderPlan(plan, warnings) {
         <button data-act="done" ${t.status==='done'?'disabled':''}>mark done</button>
         <button data-act="edit">edit</button>
         <button data-act="delete">delete</button>
-        ${t.branch ? `<button data-act="diff" title="review the branch">diff</button>${t.merged ? '<span class="pill done">merged</span>' : `<button data-act="merge" class="primary" title="merge branch into main/master">merge</button><button data-act="discard" title="delete the branch">discard</button>`}` : ''}
+        ${t.branch ? `<button data-act="diff" title="review the branch">diff</button>${t.merged ? '<span class="pill done">merged</span>' : `<button data-act="merge" class="primary" title="merge the branch back into the branch it started from">merge</button><button data-act="discard" title="delete the branch">discard</button>`}` : ''}
       </div>
     </div>`).join('');
   if (plan.risks?.length) h += `<div class="small muted" style="margin-top:8px"><b>Risks</b><ul style="margin:4px 0 0 18px;padding:0">${plan.risks.map(r=>`<li>${esc(r)}</li>`).join('')}</ul></div>`;
@@ -244,10 +244,10 @@ async function taskAction(id, act) {
   try {
     if (act === 'run') return startRun(id, false);
     if (act === 'diff') return showDiff(id);
-    if (act === 'merge') { if (!confirm(`Merge ${id}'s branch into your main branch?`)) return;
-      const r = await api(`/api/branches/${id}/merge`, {}); if (!r.ok) alert(r.error); await refresh(); return; }
+    if (act === 'merge') { if (!confirm(`Merge ${id}'s branch back into the branch it started from?`)) return;
+      const r = await api(`/api/branches/${encodeURIComponent(id)}/merge`, {}); if (!r.ok) alert(r.error); await refresh(); return; }
     if (act === 'discard') { if (!confirm(`Delete ${id}'s branch? Its changes will be lost.`)) return;
-      const r = await api(`/api/branches/${id}/discard`, {}); if (!r.ok) alert(r.output); await refresh(); return; }
+      const r = await api(`/api/branches/${encodeURIComponent(id)}/discard`, {}); if (!r.ok) alert(r.output); await refresh(); return; }
     if (act === 'delete') { if (!confirm(`Delete ${id}?`)) return; renderPlan(await api('/api/plan/task', {id, delete:true})); return; }
     if (act === 'edit') {
       const t = state.plan.tasks.find(t => t.id === id);
@@ -263,6 +263,8 @@ async function taskAction(id, act) {
 // ---------- jobs
 async function refresh() {
   state = await api('/api/state');
+  // a pair turn is waiting for an answer (page reloaded, or the dialog was dismissed)
+  if (state.pending_approvals?.length && !approvalOpen) showApproval(state.pending_approvals[0]);
   $('#root').textContent = state.root;
   const sel = $('#profile');
   if (sel.options.length === 0) {
@@ -279,6 +281,23 @@ function setBusy(b, job) {
   ['#btnPlan','#btnRunNext','#btnRunAll','#btnAsk','#btnChat','#btnRevise'].forEach(s => $(s).disabled = b);
   updateSel();
   $('#jobState').textContent = b ? `running: ${job?.kind}…` : '';
+  $('#btnCancel').classList.toggle('hidden', !b);
+}
+$('#btnCancel').onclick = async () => { try { await api('/api/cancel', {}); } catch (e) { logLine('job_error', e.message); } };
+// ---------- pair mode: every change waits for the owner
+let approvalOpen = null;
+function showApproval(a) {
+  approvalOpen = a.id;
+  const what = a.kind === 'edit' ? `${a.new_file ? 'Create' : 'Edit'} ${a.path}` : 'Run command';
+  const body = a.kind === 'edit' ? `<pre class="diff">${renderDiff(a.preview || '')}</pre>` : `<pre class="mono">${esc(a.command)}</pre>`;
+  openModal(`Approve? ${what}`, body,
+    `<button id="apYes" class="primary">approve</button> ${a.kind === 'edit' ? '<button id="apAll">approve all edits this turn</button> ' : ''}<button id="apNo">decline</button>`);
+  const answer = async (approve, remember) => {
+    try { await api('/api/approve/' + encodeURIComponent(a.id), {approve, remember: !!remember}); } catch (e) { logLine('job_error', e.message); }
+    $('#modal').classList.add('hidden'); approvalOpen = null;
+  };
+  $('#apYes').onclick = () => answer(true); $('#apNo').onclick = () => answer(false);
+  if ($('#apAll')) $('#apAll').onclick = () => answer(true, true);
 }
 async function startPlan() {
   const goal = $('#goal').value.trim(); if (!goal) return $('#goal').focus();
@@ -384,7 +403,7 @@ async function showFile(path) {
 // ---------- chat
 function renderChat(items) {
   const el = $('#chatLog');
-  el.innerHTML = items.map(m => `<div class="msg ${m.role}">${esc(m.content)}${m.model ? `<span class="m">${esc(m.model)}</span>` : ''}</div>`).join('') || '<div class="muted small">Ask anything about this project. The assistant can read files, search, and run tests — it never edits.</div>';
+  el.innerHTML = items.map(m => `<div class="msg ${m.role}">${esc(m.content)}${m.model ? `<span class="m">${esc(m.model)}</span>` : ''}</div>`).join('') || '<div class="muted small">Ask anything about this project. In chat mode the assistant reads files, searches and runs tests but never edits. Switch to a pair mode to let it make changes, with your approval.</div>';
   el.scrollTop = el.scrollHeight;
 }
 async function loadChat() { try { renderChat(await api('/api/chat')); } catch {} }
@@ -393,8 +412,12 @@ async function sendChat() {
   $('#chatQ').value = '';
   const items = await api('/api/chat'); items.push({role: 'user', content: message}); renderChat(items);
   resetAgents();
-  try { await api('/api/chat', {message, profile: $('#profile').value}); await refresh(); }
-  catch (e) { logLine('job_error', e.message); }
+  const mode = $('#chatMode').value;
+  try {
+    if (mode === 'chat') await api('/api/chat', {message, profile: $('#profile').value});
+    else await api('/api/pair', {message, mode, profile: $('#profile').value});
+    await refresh();
+  } catch (e) { logLine('job_error', e.message); }
 }
 $('#btnChat').onclick = sendChat;
 $('#chatQ').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });
@@ -420,7 +443,7 @@ function renderDiff(d) {
 }
 async function showDiff(id) {
   try {
-    const d = await api(`/api/branches/${id}/diff`);
+    const d = await api(`/api/branches/${encodeURIComponent(id)}/diff`);
     if (!d.exists) return openModal(`${id} — branch missing`, `<div class="muted">branch ${esc(d.branch)} no longer exists</div>`);
     openModal(`${id} — ${d.branch} vs ${d.base}`,
       `<div class="small muted" style="margin-bottom:8px">${esc(d.commits||'').replace(/\n/g,'<br>')}</div><pre class="small muted" style="margin:0 0 8px">${esc(d.stat)}</pre><pre class="diff">${renderDiff(d.diff || '(no changes)')}</pre>`,
@@ -486,14 +509,14 @@ function liveClear() { $('#live').classList.add('hidden'); $('#liveText').textCo
 function onEvent(ev) {
   switch (ev.kind) {
     case 'token':
-      if (ev.role === 'assistant') {
+      if (ev.role === 'assistant' || ev.role === 'pair') {
         let d = $('#chatLog .msg.assistant.streaming');
         if (!d) { d = document.createElement('div'); d.className = 'msg assistant streaming'; $('#chatLog').appendChild(d); }
         d.textContent += ev.text; $('#chatLog').scrollTop = $('#chatLog').scrollHeight; return;
       }
       liveAppend(ev.role, ev.text); return;
     case 'phase': {
-      const who = {plan:'lead', revise_plan:'lead', implement:'engineer', verify:'verifier', critique:'critic', security:'security', lead_review:'lead', docs:'docs', chat:'assistant', ask: ev.role}[ev.phase];
+      const who = {plan:'lead', revise_plan:'lead', implement:'engineer', verify:'verifier', critique:'critic', security:'security', lead_review:'lead', docs:'docs', chat:'assistant', pair:'assistant', ask: ev.role}[ev.phase];
       for (const r of ROLES) if (agentStats[r]?.state === 'active') setAgent(r, {state:'done'});
       if (who) setAgent(who, {state:'active'});
       logLine('phase', `▶ ${ev.phase}${ev.task_id?' '+ev.task_id:''}${ev.round?' round '+ev.round:''}${ev.escalated?' (escalated)':''}${ev.goal?': '+ev.goal:''}`);
@@ -522,8 +545,15 @@ function onEvent(ev) {
       liveClear();
       for (const r of ROLES) if (agentStats[r]?.state === 'active') setAgent(r, {state:'done'});
       if (ev.job === 'ask' && ev.result) { $('#askOut').textContent = JSON.stringify(ev.result.data ?? ev.result.raw, null, 2); $('#askOut').classList.remove('hidden'); }
-      if (ev.job === 'chat') loadChat();
+      if (ev.job === 'chat' || ev.job === 'pair') loadChat();
       refresh(); loadRuns(); break;
+    case 'approval_request': showApproval(ev.request); break;
+    case 'approval_resolved': if (approvalOpen === ev.id) { $('#modal').classList.add('hidden'); approvalOpen = null; } break;
+    case 'approval': logLine('report ' + (ev.approved ? 'info' : 'warn'), `${ev.approved ? 'approved' : 'declined'}${ev.auto ? ' (auto)' : ''}: ${ev.tool} ${ev.target || ''}`); break;
+    case 'job_cancelled':
+      liveClear(); if (approvalOpen) { $('#modal').classList.add('hidden'); approvalOpen = null; }
+      for (const r of ROLES) if (agentStats[r]?.state === 'active') setAgent(r, {state:'bad'});
+      logLine('job_error', `${ev.job} cancelled`); loadChat(); refresh(); loadRuns(); break;
     case 'job_error':
       liveClear();
       for (const r of ROLES) if (agentStats[r]?.state === 'active') setAgent(r, {state:'bad'});

@@ -16,6 +16,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -24,10 +25,17 @@ from typing import Any
 
 from .agent import Agent, AgentResult
 from .config import GUILD_DIR, Profile, ProjectConfig, Role, load_role
-from .providers import CostTracker, Router
+from .providers import Cancelled, CostTracker, Router
+from .providers.router import load_prices
 from .sandbox import make_sandbox
 from .tools import ToolContext
 from .trace import Trace, new_run_id
+
+# Interactive pair programming: what needs the owner's approval.
+#   ask         every file change and every non-inspection command
+#   auto-edits  file changes go through; commands still ask
+#   plan        read-only: explore and propose, change nothing
+PAIR_MODES = ("ask", "auto-edits", "plan")
 
 # Roles that must never change the project, even if their YAML lists run_command.
 READONLY_ROLES = frozenset({"critic", "security", "verifier", "assistant", "performance"})
@@ -45,6 +53,7 @@ class Task:
     branch: str | None = None
     notes: str = ""
     merged: bool = False  # set by the dashboard after the human merges the branch
+    base: str | None = None  # branch the task started from; the dashboard merges back into it
 
 
 _VAGUE = (
@@ -99,6 +108,18 @@ _COMMIT_EXCLUDES = (
 )
 
 
+def _slug(text: str, limit: int) -> str:
+    """Lower-case, runs of anything but letters/digits become one '-': always a valid git ref
+    component (model-written ids like "Task 1: set~up" are not)."""
+    return re.sub(r"-{2,}", "-", "".join(c if c.isalnum() else "-" for c in str(text).lower()))[
+        :limit
+    ].strip("-")
+
+
+def _files_in_diff(diff: str) -> list[str]:
+    return sorted(set(re.findall(r"^diff --git a/.+? b/(.+)$", diff, flags=re.M)))
+
+
 def _task_from_dict(t: dict) -> Task:
     known = Task.__dataclass_fields__
     return Task(**{k: v for k, v in t.items() if k in known})
@@ -134,10 +155,17 @@ class Plan:
             created=d.get("created", time.time()),
         )
 
+    def unmet_dependencies(self, task: Task) -> list[str]:
+        """Ids this task still waits for. Ids that are not in the plan (task deleted in the
+        dashboard, hand-edited plan.json) are ignored instead of blocking the task forever."""
+        status = {t.id: t.status for t in self.tasks}
+        return [d for d in task.depends_on if d in status and d != task.id and status[d] != "done"]
+
     def next_task(self) -> Task | None:
-        done = {t.id for t in self.tasks if t.status == "done"}
+        # "in_progress" on disk with nobody running it is a leftover from a killed run
+        # (Ctrl+C, crash, closed terminal); it must be runnable again, not stuck forever.
         for t in self.tasks:
-            if t.status == "todo" and all(d in done for d in t.depends_on):
+            if t.status in ("todo", "in_progress") and not self.unmet_dependencies(t):
                 return t
         return None
 
@@ -200,10 +228,16 @@ class Guild:
         self.run_dir = root / GUILD_DIR / "runs" / self.run_id
         self.trace = Trace(self.run_dir / "trace.jsonl", self.run_id)
         self.tracker = CostTracker()
+        self.tracker.prices.update(load_prices(root / GUILD_DIR / "prices.yaml"))
         self.router = Router(
             profile, self.tracker, on_fallback=lambda slot, m, why: self._on_fallback(slot, m, why)
         )
         self.sandbox = make_sandbox(root, cfg.sandbox, cfg.docker_image)
+        # set by cancel(): checked before every model call, between tool calls, while a
+        # command runs and while waiting for an approval
+        self.cancel_event = threading.Event()
+        self.router.cancel = self.cancel_event
+        self.sandbox.cancel = self.cancel_event
         self._roles: dict[str, Role] = {}
         self.trace.emit(
             "run_start", profile=profile.name, project=str(root), config=cfg.model_dump()
@@ -247,11 +281,19 @@ class Guild:
             self.trace,
             escalate=escalate,
             on_token=self.on_token,
+            # the profile's per-task tool budget governs the implementation loop
+            max_tool_calls=(
+                self.profile.limits.max_tool_calls_per_task if name == "engineer" else None
+            ),
         )
 
     def _phase(self, name: str, **info: Any) -> None:
         self.trace.emit("phase", phase=name, **info)
         self.report("phase", name)
+
+    def cancel(self) -> None:
+        """Ask the running job to stop as soon as it can. Raises Cancelled in the job."""
+        self.cancel_event.set()
 
     def close(self) -> None:
         self.trace.emit(
@@ -359,13 +401,32 @@ class Guild:
         return Plan.from_dict(json.loads(p.read_text(encoding="utf-8")))
 
     # ------------------------------------------------------------------ git helpers
+    def _git_rc(self, *args: str) -> tuple[int, str]:
+        """(exit code, stdout+stderr). Use this when an error message must not be mistaken
+        for data (a diff, a branch name)."""
+        try:
+            r = subprocess.run(
+                ["git", *args],
+                cwd=self.root,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError as e:  # git not installed
+            return 127, f"git error: {e}"
+        return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
+
     def _git(self, *args: str, check: bool = False) -> str:
-        r = subprocess.run(
-            ["git", *args], cwd=self.root, capture_output=True, encoding="utf-8", errors="replace"
+        rc, out = self._git_rc(*args)
+        if check and rc != 0:
+            raise RuntimeError(f"git {' '.join(args)} failed: {out}")
+        return out
+
+    def _untracked(self) -> set[str]:
+        # -z: plain names; without it git quotes non-ASCII paths and they never match again
+        return set(
+            filter(None, self._git("ls-files", "-z", "--others", "--exclude-standard").split("\0"))
         )
-        if check and r.returncode != 0:
-            raise RuntimeError(f"git {' '.join(args)} failed: {r.stderr.strip()}")
-        return (r.stdout + r.stderr).strip()
 
     def _has_git(self) -> bool:
         return (self.root / ".git").is_dir()
@@ -378,6 +439,9 @@ class Guild:
         self._base_branch = None
         if not self._has_git() or self.dry_run:
             return None
+        # captured even when no branch is made: the review diff uses it to show only the files
+        # this task created
+        self._pre_untracked = self._untracked()
         if not self._git("rev-parse", "--verify", "--quiet", "HEAD").startswith(
             tuple("0123456789abcdef")
         ):
@@ -387,8 +451,7 @@ class Guild:
                 'NOT commit. Run: git add -A && git commit -m "initial commit"',
             )
             return None
-        slug = "".join(c if c.isalnum() else "-" for c in task.title.lower())[:40].strip("-")
-        branch = f"guild/{task.id.lower()}-{slug}"
+        branch = f"guild/{_slug(task.id, 30) or 'task'}-{_slug(task.title, 40)}".rstrip("-")
         if self._git(
             "status",
             "--porcelain",
@@ -404,9 +467,6 @@ class Guild:
                 "branch and will NOT commit. Commit or stash first for a clean branch.",
             )
             return None
-        self._pre_untracked = set(
-            filter(None, self._git("ls-files", "--others", "--exclude-standard").splitlines())
-        )
         # Remember where we started. An accepted task stays on its branch so dependent tasks
         # build on it (run all); a rejected task goes back here so its broken work never leaks
         # into the next task's branch.
@@ -434,38 +494,94 @@ class Guild:
             return
         self._git("add", "-A", "--", ".", f":(exclude){GUILD_DIR}", *_COMMIT_EXCLUDES)
         for f in getattr(self, "_pre_untracked", ()):
-            self._git("reset", "-q", "--", f)
-        if (
-            self._git("diff", "--cached", "--quiet") == ""
-            and self._git("diff", "--cached", "--stat") == ""
-        ):
-            return
-        self._git("commit", "-q", "-m", message)
+            self._git("reset", "-q", "--", f":(literal){f}")
+        if self._git_rc("diff", "--cached", "--quiet")[0] == 0:
+            return  # nothing staged
+        rc, out = self._git_rc("commit", "-q", "-m", message)
+        if rc != 0 and re.search(r"tell me who you are|auto-detect email|empty ident", out):
+            # fresh git install without user.name/user.email: commit as "guild" rather than
+            # silently leaving an accepted task uncommitted
+            rc, out = self._git_rc(
+                "-c",
+                "user.name=guild",
+                "-c",
+                "user.email=guild@localhost",
+                "commit",
+                "-q",
+                "-m",
+                message,
+            )
+            if rc == 0:
+                self.report(
+                    "warn",
+                    "git has no user.name/user.email; committed as 'guild'. Set them with: "
+                    'git config --global user.name "You" && '
+                    'git config --global user.email "you@example.com"',
+                )
+        if rc != 0:
+            self.trace.emit("note", role="guild", msg=f"git commit failed: {out[:300]}")
+            self.report("warn", f"git commit failed — the work is NOT on the branch: {out[:200]}")
+
+    _NEW_FILE_CHARS = 20_000
+
+    def _new_files_diff(self) -> str:
+        """Untracked files created since the task started, as a diff. Plain `git diff` never
+        shows them, so without a branch (dirty tree, no commits yet) or after a failed commit
+        the reviewers would not see the new code at all."""
+        chunks: list[str] = []
+        skip = ("__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache", GUILD_DIR, ".git")
+        for rel in sorted(self._untracked() - set(getattr(self, "_pre_untracked", ()))):
+            if rel.endswith(".pyc") or any(part in skip for part in Path(rel).parts):
+                continue
+            p = self.root / rel
+            try:
+                raw = p.read_bytes()[: self._NEW_FILE_CHARS]
+            except OSError:
+                continue
+            head = f"diff --git a/{rel} b/{rel}\nnew file\n--- /dev/null\n+++ b/{rel}\n"
+            if b"\x00" in raw:
+                chunks.append(head + "(binary file)")
+                continue
+            body = raw.decode("utf-8", errors="replace")
+            chunks.append(head + "\n".join("+" + ln for ln in body.splitlines()))
+        return "\n".join(chunks)
 
     def _diff_text(self, base: str | None) -> str:
         if not self._has_git():
             return "(no git; review working tree)"
         excl = ["--", ".", f":(exclude){GUILD_DIR}"]
-        return (
-            self._git("diff", base or "HEAD~1", *excl)
-            or self._git("diff", *excl)
-            or self._git("diff", "--cached", *excl)
-            or "(no diff)"
-        )
+
+        def diff(*args: str) -> str:
+            rc, out = self._git_rc("diff", "--no-ext-diff", *args, *excl)
+            return out if rc == 0 else ""  # an error message is not a diff
+
+        tracked = diff(base or "HEAD~1") or diff() or diff("--cached")
+        text = "\n".join(x for x in (tracked, self._new_files_diff()) if x)
+        return text or "(no diff)"
 
     # ------------------------------------------------------ branch helpers (for the UI / human)
     def default_branch(self) -> str:
         for cand in ("main", "master"):
-            if self._git("rev-parse", "--verify", "--quiet", cand):
+            if self._branch_exists(cand):
                 return cand
-        return self._git("rev-parse", "--abbrev-ref", "HEAD") or "main"
+        cur = self.current_branch()
+        return cur if cur != "HEAD" else "main"
 
     def current_branch(self) -> str:
-        return self._git("rev-parse", "--abbrev-ref", "HEAD")
+        """Branch name, or "HEAD" when detached. Works on a repository with no commits."""
+        rc, out = self._git_rc("symbolic-ref", "--short", "-q", "HEAD")
+        return out if rc == 0 and out else "HEAD"
+
+    def _branch_exists(self, name: str | None) -> bool:
+        return (
+            bool(name)
+            and not name.startswith("-")
+            and (self._git_rc("rev-parse", "--verify", "--quiet", f"refs/heads/{name}")[0] == 0)
+        )
 
     def branch_diff(self, branch: str, base: str | None = None) -> dict:
-        base = base or self.default_branch()
-        if not self._git("rev-parse", "--verify", "--quiet", branch):
+        base = base if self._branch_exists(base) else self.default_branch()
+        if not self._branch_exists(branch):
             return {"branch": branch, "base": base, "exists": False, "diff": "", "stat": ""}
         rng = f"{base}...{branch}"
         return {
@@ -478,11 +594,14 @@ class Guild:
         }
 
     def merge_branch(self, branch: str, base: str | None = None) -> dict:
-        """Merge a guild branch into the base branch. Refuses on a dirty tree or conflicts."""
-        base = base or self.default_branch()
+        """Merge a guild branch into the base branch. Refuses on a dirty tree or conflicts.
+
+        base: the branch the task started from (Task.base). When it is unknown or gone (e.g. a
+        stacked guild branch that was merged and deleted) the default branch is used."""
+        base = base if self._branch_exists(base) else self.default_branch()
         if base == branch:
             return {"ok": False, "error": f"cannot merge {branch} into itself (no base branch)"}
-        if not self._git("rev-parse", "--verify", "--quiet", branch):
+        if not self._branch_exists(branch):
             return {"ok": False, "error": f"branch {branch} does not exist"}
         if self._git(
             "status",
@@ -494,13 +613,15 @@ class Guild:
             ":(exclude).gitignore",
         ):
             return {"ok": False, "error": "working tree is dirty; commit or stash first"}
-        self._git("checkout", "-q", base, check=True)
-        out = self._git("merge", "--no-ff", "-q", "-m", f"Merge {branch} (guild)", branch)
+        rc, out = self._git_rc("checkout", "-q", base)
+        if rc != 0:
+            return {"ok": False, "error": f"could not switch to {base}:\n{out}"}
+        rc, out = self._git_rc("merge", "--no-ff", "-q", "-m", f"Merge {branch} (guild)", branch)
         if "CONFLICT" in out or self._git("ls-files", "-u"):
             self._git("merge", "--abort")
             return {"ok": False, "error": f"merge conflict; resolve manually:\n{out}"}
-        if "fatal" in out or "error" in out:
-            return {"ok": False, "error": out}
+        if rc != 0:  # exit code, not the words "error"/"fatal" (a branch may be named that)
+            return {"ok": False, "error": out or f"git merge exited {rc}"}
         deleted = self._git("branch", "-d", branch)
         return {
             "ok": True,
@@ -510,11 +631,15 @@ class Guild:
         }
 
     def discard_branch(self, branch: str) -> dict:
-        base = self.default_branch()
+        # `git branch -D` is unrecoverable for unmerged work: only ever on guild's own branches
+        if not str(branch).startswith("guild/"):
+            return {"ok": False, "output": f"refusing to delete {branch}: not a guild/ branch"}
         if self.current_branch() == branch:
-            self._git("checkout", "-q", base, check=True)
-        out = self._git("branch", "-D", branch)
-        return {"ok": "Deleted" in out or "deleted" in out, "output": out}
+            rc, out = self._git_rc("checkout", "-q", self.default_branch())
+            if rc != 0:
+                return {"ok": False, "output": f"could not leave {branch}:\n{out}"}
+        rc, out = self._git_rc("branch", "-D", "--", branch)
+        return {"ok": rc == 0, "output": out}
 
     # ------------------------------------------------------------------ verification
     _PYTEST_RX = re.compile(r"(\d+) passed|(\d+) failed|(\d+) error", re.I)
@@ -584,18 +709,23 @@ class Guild:
     def run_task(self, plan: Plan, task: Task, *, roles: list[str] | None = None) -> TaskOutcome:
         try:
             return self._run_task(plan, task, roles=roles)
-        except Exception as e:
+        except BaseException as e:  # incl. KeyboardInterrupt: Ctrl+C must not strand the task
             import traceback
 
+            interrupted = isinstance(e, (KeyboardInterrupt, SystemExit, Cancelled))
             self.trace.emit(
                 "error",
                 task_id=task.id,
-                error=f"{type(e).__name__}: {e}",
-                traceback=traceback.format_exc()[-4000:],
+                error="interrupted" if interrupted else f"{type(e).__name__}: {e}",
+                traceback="" if interrupted else traceback.format_exc()[-4000:],
             )
             if task.status == "in_progress":
                 task.status = "todo"
-                task.notes = f"guild error: {type(e).__name__}: {e}"
+                task.notes = (
+                    "interrupted before it finished"
+                    if interrupted
+                    else f"guild error: {type(e).__name__}: {e}"
+                )
                 self.save_plan(plan)
             self._leave_branch()
             raise
@@ -608,6 +738,14 @@ class Guild:
         self.save_plan(plan)
 
         task.branch = self._start_branch(task)
+        if task.branch:
+            # Where to merge back to. A task stacked on another guild branch (run all) inherits
+            # that task's base, so the dashboard never merges it into a throwaway branch.
+            base = self._base_branch
+            if base and base.startswith("guild/"):
+                under = next((t for t in plan.tasks if t.branch == base and t is not task), None)
+                base = under.base if under else None
+            task.base = base
         base_ref = (
             self._git("rev-parse", "--verify", "--quiet", "HEAD") if self._has_git() else None
         )
@@ -712,6 +850,9 @@ class Guild:
                     context_blocks=project_ctx,
                 )
                 self._task_written |= eng_agent.ctx.files_written
+                # the round's commit above ran before this second attempt; without committing
+                # again its files stay untracked: absent from the branch and the review diff
+                self._commit(f"guild({task.id}) round {rounds}: {task.title}")
                 if (
                     eng.data
                     and eng.data.get("status") == "done"
@@ -761,6 +902,12 @@ class Guild:
                 )
 
             diff = self._diff_text(base_ref)
+            self.trace.emit(
+                "review_input",
+                round=rounds,
+                diff_chars=len(diff),
+                files_in_diff=_files_in_diff(diff),
+            )
             review_ctx = {
                 "Task": task_brief,
                 "Diff": diff[:30000],
@@ -863,7 +1010,16 @@ class Guild:
                 self._commit(f"guild({task.id}) docs")
         elif task.status != "blocked":
             task.status = "todo"
-            task.notes = feedback[:2000]
+            notes = feedback
+            if lead_decision and lead_decision.get("decision") != "ACCEPT":
+                # the Lead's reason is the only explanation the owner gets for a rejection
+                notes = "\n".join(
+                    [
+                        f"LEAD {lead_decision.get('decision')}: {lead_decision.get('notes', '')}",
+                        *(f"- {i}" for i in lead_decision.get("improvements") or []),
+                    ]
+                )
+            task.notes = notes[:2000]
 
         self.save_plan(plan)
         if not accepted:
@@ -906,13 +1062,19 @@ class Guild:
         if task_ids:
             # explicitly selected tasks all get their turn; a failure only skips dependants
             failed: set[str] = set()
+            known = {t.id for t in plan.tasks}
+            unknown = [tid for tid in task_ids if tid not in known]
+            if unknown:
+                raise RuntimeError(
+                    f"no task {', '.join(unknown)} in the plan (tasks: {', '.join(sorted(known))})"
+                )
             for tid in task_ids:
                 task = plan.get(tid)
                 if task.status == "done":
                     continue
-                not_done = [
-                    d for d in task.depends_on if d in failed or plan.get(d).status != "done"
-                ]
+                not_done = sorted(
+                    set(plan.unmet_dependencies(task)) | (set(task.depends_on) & failed)
+                )
                 if not_done:
                     self.report(
                         "warn",
@@ -947,10 +1109,88 @@ class Guild:
         blocks = {"Project": self.project_summary()}
         if plan:
             blocks["Current plan"] = json.dumps(plan.to_dict(), indent=1)[:6000]
-        prior = [_M(h["role"], h["content"]) for h in (history or [])[-12:] if h.get("content")]
+        prior = [
+            _M(h["role"], str(h["content"]))
+            for h in (history or [])[-12:]
+            if isinstance(h, dict) and h.get("role") in ("user", "assistant") and h.get("content")
+        ]
         return self.agent("assistant").run(
             question, context_blocks=blocks, prior=prior, expect_json=False
         )
+
+    # ------------------------------------------------------------------ pair programming
+    def pair(
+        self,
+        message: str,
+        history: list[dict] | None = None,
+        *,
+        mode: str = "ask",
+        approver: Callable[[dict], tuple[bool, str]] | None = None,
+    ) -> AgentResult:
+        """One turn of interactive pair programming in the owner's working tree.
+
+        Unlike run_task there is no branch, no commit and no review round: the owner is the
+        reviewer, live. `approver(request) -> (approved, reason)` is asked before every file
+        change and every non-inspection command (see PAIR_MODES). With no approver nothing
+        that needs approval happens: the gate fails closed.
+
+        history: [{"role": "user" | "assistant", "content": str}]
+        """
+        from .providers import Message as _M
+
+        if mode not in PAIR_MODES:
+            raise ValueError(f"mode must be one of {PAIR_MODES}, not {mode!r}")
+        self._phase("pair", mode=mode)
+        agent = self.agent("pair")
+        ctx = agent.ctx
+        if mode == "plan":
+            ctx.readonly = True
+        else:
+
+            def gate(req: dict) -> tuple[bool, str]:
+                auto = mode == "auto-edits" and req.get("kind") == "edit"
+                if auto:
+                    approved, why = True, "auto-edits"
+                elif approver is None:
+                    approved, why = False, "nobody is available to approve it"
+                else:
+                    approved, why = approver(req)
+                self.trace.emit(
+                    "approval",
+                    tool=req.get("tool"),
+                    target=req.get("path") or req.get("command"),
+                    approved=bool(approved),
+                    auto=auto,
+                    reason=why,
+                )
+                return bool(approved), why
+
+            ctx.approver = gate
+        blocks = {
+            "Project": self.project_summary(),
+            "Mode": {
+                "ask": "ASK: the owner approves each file change and command.",
+                "auto-edits": "AUTO-EDITS: file changes are applied directly; commands need "
+                "the owner's approval.",
+                "plan": "PLAN: read-only. Explore, then reply with a step-by-step plan. "
+                "Do not call write_file, edit_file or commands that change anything.",
+            }[mode],
+        }
+        prior = [
+            _M(h["role"], str(h["content"]))
+            for h in (history or [])[-16:]
+            if isinstance(h, dict) and h.get("role") in ("user", "assistant") and h.get("content")
+        ]
+        res = agent.run(message, context_blocks=blocks, prior=prior, expect_json=False)
+        res.data = {"text": res.raw, "files_changed": sorted(ctx.files_written), "mode": mode}
+        self.trace.emit(
+            "decision",
+            role="pair",
+            decision="reply",
+            summary=res.raw[:300],
+            files=res.data["files_changed"],
+        )
+        return res
 
     # ------------------------------------------------------------------ plan revision
     def revise_plan(self, instruction: str) -> Plan:
@@ -990,6 +1230,8 @@ class Guild:
                     status=status,
                     branch=prev.branch if prev else None,
                     notes=prev.notes if prev else "",
+                    merged=bool(prev and prev.merged and prev.status == "done"),
+                    base=prev.base if prev else None,
                 )
             )
         plan = Plan(

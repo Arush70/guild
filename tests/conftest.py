@@ -55,6 +55,7 @@ def _role_of(messages: list[Message]) -> str:
         "Security",
         "Technical Writer",
         "Researcher",
+        "Pair Programmer",
     ):
         if r in sys[:300]:
             return {
@@ -65,6 +66,7 @@ def _role_of(messages: list[Message]) -> str:
                 "Security": "security",
                 "Technical Writer": "docs",
                 "Researcher": "researcher",
+                "Pair Programmer": "pair",
             }[r]
     return "unknown"
 

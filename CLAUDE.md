@@ -34,8 +34,9 @@ shares its JSONL trace discipline with his dissertation project (MACS) but is a 
 
 ```
 src/guild/
-  cli.py              typer commands: init(wizard) doctor plan status run review ask cost roles watch ui
-  workflow.py         Guild class: plan(), revise_plan(), run_task(), run_tasks(), verify(), ask(), chat()
+  cli.py              typer commands: init(wizard) doctor plan status run pair review ask cost roles watch ui
+  workflow.py         Guild class: plan(), revise_plan(), run_task(), run_tasks(), verify(), ask(), chat(),
+                      pair() (interactive turn behind ToolContext.approver, ADR-016), cancel()
   agent.py            one role's tool-calling loop; extract_json; extract_text_tool_calls;
                       validates the final reply against schemas.py and asks for repairs (≤2)
   schemas.py          pydantic output contract per role/job (lenient coercions for small models)
@@ -52,8 +53,13 @@ src/guild/
   data/roles/*.yaml   lead engineer critic security docs researcher performance kaggle assistant(chat, prose)
   data/templates/*.md PRD/ARCHITECTURE/RULES/TASKS/MEMORY/DECISIONS scaffolds for `guild init --docs`
   data/profiles/*.yaml free lite pro (guild init writes a machine-specific override into .guild/profiles/)
-tests/                74 tests; FakeProvider in conftest.py scripts model replies, no API calls;
-                      test_robustness.py (schemas/repair/streaming), test_hardware.py (init wizard)
+vscode-extension/     VS Code front end (ADR-014): extension.js + lib/{client,server,format}.js +
+                      media/ (chat webview). No deps, no build. `npm test` (needs `guild` installed),
+                      `npm run package` → .vsix. Talks only to the dashboard HTTP API.
+tests/                193 tests; FakeProvider in conftest.py scripts model replies, no API calls;
+                      test_robustness.py (schemas/repair/streaming), test_hardware.py (init wizard),
+                      test_hardening*.py (2026-11-12 break-it audit: every test is an attack that worked),
+                      test_pair.py (approval gate, modes, cancel, /api/pair, `guild pair`)
 ```
 
 ## Conventions
@@ -62,7 +68,9 @@ tests/                74 tests; FakeProvider in conftest.py scripts model replie
   pinned in pyproject.toml so results don't drift between ruff versions; line length 100).
 - `pytest` must pass. Tests never call real APIs — use `FakeProvider` (scripted turns per role)
   or a tiny custom provider class registered with `router.register_provider("fake", obj)`.
-- Keep the safety model intact: tools resolve inside the project root and refuse `..`;
+- Keep the safety model intact: tools resolve inside the project root and refuse `..`; no role
+  writes into `.git/` or `.guild/`; an agent may only call tools listed in its role YAML;
+  agents never read `.env`; the dashboard only answers requests addressed to localhost;
   critic/security/verifier are read-only; docs may only write `*.md`; `*KEY*`/`*TOKEN*`/
   `*SECRET*` env vars are stripped from subprocesses; `.guild/` is never committed by guild
   and never appears in review diffs; the `free` profile refuses any model with a price > 0.
@@ -94,7 +102,7 @@ manual testing at `C:\Machine Learning projects\demo` (git branch is `master`).
 
 ## State of the project (2026-10-02, v0.2.x)
 
-Works end to end with a scripted fake provider (74 tests) and verified in a headless browser
+Works end to end with a scripted fake provider (193 tests) and verified in a headless browser
 (streaming, plan check, diff modal, trace viewer, merge). One real run on the free profile
 (Ollama `qwen2.5-coder:7b`) ACCEPTED the demo task (TASK-001) but overwrote existing code;
 the read-before-write / removed-tests guards (TASK-002) and a full code audit (see

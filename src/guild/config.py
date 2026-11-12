@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 GUILD_DIR = ".guild"
 
@@ -64,6 +64,9 @@ class Role(BaseModel):
 class ProjectConfig(BaseModel):
     """Per-project settings stored in <project>/.guild/config.yaml."""
 
+    # also validate `cfg.sandbox = ...` style updates (the dashboard's /api/config does that)
+    model_config = ConfigDict(validate_assignment=True)
+
     profile: str = "free"
     test_command: str = "python -m pytest -q"
     lint_command: str | None = None
@@ -87,6 +90,17 @@ class ProjectConfig(BaseModel):
         default_factory=lambda: ["lead", "engineer", "verifier", "critic", "security", "docs"]
     )
 
+    @field_validator("sandbox", mode="before")
+    @classmethod
+    def _sandbox(cls, v: object) -> object:
+        # A typo ("dockr") used to fall back to the local sandbox silently, i.e. run untrusted
+        # code on the host while the config claimed isolation.
+        if isinstance(v, str):
+            v = v.strip().lower()
+        if v not in {"local", "docker"}:
+            raise ValueError(f"sandbox must be 'local' or 'docker', not {v!r}")
+        return v
+
 
 # ---------------------------------------------------------------------------
 
@@ -104,6 +118,9 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 
 def _find(kind: str, name: str, project: Path | None) -> Path:
+    if not name or any(c in name for c in "/\\") or name.startswith("."):
+        # names come from config files and the dashboard; never let one walk the filesystem
+        raise FileNotFoundError(f"invalid {kind[:-1]} name: {name!r}")
     candidates: list[Path] = []
     if project is not None:
         candidates.append(project / GUILD_DIR / kind / f"{name}.yaml")

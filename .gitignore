@@ -18,3 +18,7 @@ Thumbs.db
 .ipynb_checkpoints/
 .idea/
 .vscode/
+
+# VS Code extension build output
+*.vsix
+node_modules/

@@ -4,7 +4,8 @@ One file per run at .guild/runs/<run_id>/trace.jsonl. Schema is deliberately fla
 loaded with pandas and analysed offline (the same discipline as ASTRA/MACS traces).
 
 Event kinds:
-  run_start, run_end, phase, model_call, tool_call, decision, verification, fallback, error, note
+  run_start, run_end, phase, model_call, tool_call, decision, verification, review_input,
+  fallback, error, note, task_end
 """
 
 from __future__ import annotations
@@ -35,8 +36,11 @@ class Trace:
         self._seq += 1
         ev = {"seq": self._seq, "ts": round(time.time(), 3), "run_id": self.run_id, "kind": kind}
         ev.update({k: _jsonable(v) for k, v in fields.items()})
-        self._f.write(json.dumps(ev, ensure_ascii=False) + "\n")
-        self._f.flush()
+        # A trace problem must never take a run down: unknown objects are stringified and a
+        # closed/failed file is ignored (late events from a UI thread after close()).
+        with contextlib.suppress(OSError, ValueError):
+            self._f.write(json.dumps(ev, ensure_ascii=False, default=repr) + "\n")
+            self._f.flush()
         if self.echo:
             self.echo(ev)
         return ev
@@ -71,7 +75,7 @@ class Trace:
             latency_s=round(latency_s, 3),
             n_tool_calls=n_tool_calls,
             stop_reason=stop_reason,
-            content_preview=content_preview[:300],
+            content_preview=(content_preview or "")[:300],
         )
 
     def tool_call(self, *, role: str, tool: str, args: dict, result_preview: str, ok: bool) -> None:
@@ -80,12 +84,14 @@ class Trace:
             role=role,
             tool=tool,
             args=_short_args(args),
-            result_preview=result_preview[:300],
+            result_preview=str(result_preview or "")[:300],
             ok=ok,
         )
 
 
 def _short_args(args: dict) -> dict:
+    if not isinstance(args, dict):
+        return {"_args": str(args)[:200]}
     out = {}
     for k, v in args.items():
         if isinstance(v, str) and len(v) > 200:
@@ -104,14 +110,24 @@ def _jsonable(v: Any) -> Any:
         return {str(k): _jsonable(x) for k, x in v.items()}
     if isinstance(v, (set, tuple, list)):
         return [_jsonable(x) for x in v]
+    if isinstance(v, bytes):
+        return v.decode("utf-8", errors="replace")
     return v
 
 
 def read_trace(path: Path) -> list[dict[str, Any]]:
+    """Load a trace. Lines that are not complete JSON objects are skipped: the dashboard reads
+    traces while a run is still appending to them, so the last line may be half-written."""
     events = []
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
-            if line:
-                events.append(json.loads(line))
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(ev, dict) and "kind" in ev:
+                events.append(ev)
     return events

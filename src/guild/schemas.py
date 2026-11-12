@@ -11,6 +11,7 @@ list is expected becomes a one-item list; "true"/"yes" become booleans).
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -46,6 +47,24 @@ def _as_list(v: Any) -> Any:
     return v
 
 
+def _as_str_list(v: Any) -> Any:
+    """Like _as_list, and items that are numbers/objects become strings (depends_on: [1, 2])."""
+    v = _as_list(v)
+    if not isinstance(v, (list, tuple)):
+        return v
+    out: list[str] = []
+    for x in v:
+        if x is None:
+            continue
+        if isinstance(x, str):
+            out.append(x)
+        elif isinstance(x, (dict, list)):
+            out.append(json.dumps(x, ensure_ascii=False))
+        else:
+            out.append(str(x))
+    return out
+
+
 def _as_bool(v: Any) -> Any:
     if isinstance(v, str):
         return v.strip().lower() in {"true", "yes", "1", "pass", "passed"}
@@ -60,7 +79,7 @@ class PlanTask(_Lenient):
     done_when: str = ""
     depends_on: list[str] = Field(default_factory=list)
 
-    _lists = field_validator("files", "depends_on", mode="before")(_as_list)
+    _lists = field_validator("files", "depends_on", mode="before")(_as_str_list)
 
 
 class PlanOutput(_Lenient):
@@ -69,22 +88,32 @@ class PlanOutput(_Lenient):
     risks: list[str] = Field(default_factory=list)
     questions_for_owner: list[str] = Field(default_factory=list)
 
-    _lists = field_validator("roadmap", "risks", "questions_for_owner", mode="before")(_as_list)
+    _lists = field_validator("roadmap", "risks", "questions_for_owner", mode="before")(_as_str_list)
 
     @field_validator("tasks", mode="after")
     @classmethod
     def _ids(cls, tasks: list[PlanTask]) -> list[PlanTask]:
+        # ids end up in URLs, branch names and CLI arguments: keep them to a safe alphabet
+        # ("Task 1: setup" -> "Task-1-setup") and rewrite depends_on the same way
+        def clean(raw: str) -> str:
+            return re.sub(r"[^A-Za-z0-9_.-]+", "-", str(raw).strip()).strip("-.")
+
+        used: set[str] = set()
         for i, t in enumerate(tasks):
-            if not t.id:
-                t.id = f"T{i + 1}"
-            t.id = t.id.strip()
+            t.id = clean(t.id) or f"T{i + 1}"
+            if t.id in used:
+                # two tasks sharing an id make every by-id lookup (run, merge, edit) hit the
+                # wrong one; give the later task a fresh id
+                n = i + 1
+                while f"T{n}" in used:
+                    n += 1
+                t.id = f"T{n}"
+            used.add(t.id)
         known = {t.id for t in tasks}
         for t in tasks:
             # small models write "none", "T0", "T1 " or the task's own id — drop what's not a
             # real other task so run_tasks()/next_task() never hit a dangling dependency
-            t.depends_on = [
-                d for d in (str(x).strip() for x in t.depends_on) if d in known and d != t.id
-            ]
+            t.depends_on = [d for d in (clean(x) for x in t.depends_on) if d in known and d != t.id]
         return tasks
 
 
@@ -93,12 +122,21 @@ class LeadReview(_Lenient):
     notes: str = ""
     improvements: list[str] = Field(default_factory=list)
 
-    _lists = field_validator("improvements", mode="before")(_as_list)
+    _lists = field_validator("improvements", mode="before")(_as_str_list)
 
     @field_validator("decision", mode="before")
     @classmethod
     def _upper(cls, v: Any) -> Any:
-        return v.strip().upper() if isinstance(v, str) else v
+        if not isinstance(v, str):
+            return v
+        v = v.strip().strip(".!\"'` ").upper().replace(" ", "_").replace("-", "_")
+        if v in {"ACCEPTED", "APPROVE", "APPROVED", "LGTM", "OK", "PASS"}:
+            return "ACCEPT"
+        if v in {"REVISION", "REVISED", "REQUEST_CHANGES", "CHANGES_REQUESTED", "REJECT"}:
+            return "REVISE"
+        if v in {"REPLANNED", "RE_PLAN"}:
+            return "REPLAN"
+        return v
 
 
 class EngineerOutput(_Lenient):
@@ -108,7 +146,7 @@ class EngineerOutput(_Lenient):
     tests_run: str = ""
     notes_for_reviewer: str = ""
 
-    _lists = field_validator("files_changed", mode="before")(_as_list)
+    _lists = field_validator("files_changed", mode="before")(_as_str_list)
 
     @field_validator("status", mode="before")
     @classmethod
@@ -169,7 +207,7 @@ class VerifierOutput(_Lenient):
     failures: list[str] = Field(default_factory=list)
     output_tail: str = ""
 
-    _lists = field_validator("failures", mode="before")(_as_list)
+    _lists = field_validator("failures", mode="before")(_as_str_list)
     _bool = field_validator("passed", mode="before")(_as_bool)
 
 
@@ -177,7 +215,7 @@ class DocsOutput(_Lenient):
     files_changed: list[str] = Field(default_factory=list)
     summary: str = ""
 
-    _lists = field_validator("files_changed", mode="before")(_as_list)
+    _lists = field_validator("files_changed", mode="before")(_as_str_list)
 
 
 class Alternative(_Lenient):

@@ -4,10 +4,53 @@ Current state of the project. Update at the end of every working session.
 
 ## Current status (2026-10-02)
 
-v0.2.x. 74 tests with scripted fake models; `ruff check` + `ruff format --check` clean (rule set
+v0.2.x. 193 tests with scripted fake models; `ruff check` + `ruff format --check` clean (rule set
 pinned). TASK-001 has one accepted free-profile real-model run; TASK-002 guards are in. A full
 code audit on 2026-10-02 fixed 14 defects (see CHANGELOG "Unreleased") — none of it is confirmed
 on a real model run yet; that re-run is the next step.
+
+## Break-it audit 2026-11-12 (what was wrong and what changed)
+
+Full list in CHANGELOG "Unreleased". The ones that change how the next real run behaves:
+
+- Push-back after "blocked" (the exact path the first real run took): the files the engineer
+  then created were never committed, so the branch and the review diff lacked them. Fixed.
+- Ollama streams every tool call of a turn with index 0; guild glued them into one broken call.
+  Fixed (split on a new call id). Text tool calls whose file content contains a lone `{`/`}` or
+  raw newlines are parsed now.
+- Free profile + a Groq/Gemini key: those models have a list price, so the $0 rule has always
+  rejected them — but only after sending the request. They are skipped before the call now.
+  To actually use a free tier on `free`, set the model to 0 in `.guild/prices.yaml`
+  (`groq/llama-3.3-70b-versatile: 0`). OPEN DECISION for the owner: should `guild init` write
+  that file when it adds free-tier models to the free profile? (Not done: RULES says the $0
+  rule is never weakened without a decision.)
+- Ctrl+C no longer strands a task in `in_progress`.
+- New trace event `review_input` (round, diff_chars, files_in_diff): what the reviewers saw.
+- `Task.base` records the branch a task started from; the dashboard merges back into it.
+- None of this is confirmed on a real model run yet (same status as the 2026-10-02 audit).
+- Not verified here: Windows-only paths (taskkill, cp1252) and real provider APIs — the
+  provider fixes are tested against fakes that mimic the documented error/stream shapes.
+
+## Pair mode (2026-11-12)
+
+`guild pair` / `/api/pair` / pair modes in the dashboard and VS Code chat (TASK-030, ADR-016).
+Verified with scripted models only, including the extension e2e test (approve, decline, open
+diff, cancel a running command). NOT yet tried on a real model. Expect the free profile's 7b
+model to be weak here; the role prompt is `data/roles/pair.yaml`. Known limit: between turns
+only the text of the conversation is replayed, not tool results, so the agent re-reads files
+each turn (TASK-031). SSE: an approval travels as `{"kind": "approval_request", "request":
+{id, kind: edit|command, path|command, preview, proposed}}`; `/api/state.pending_approvals`
+has the same objects for clients that connect late.
+
+## VS Code extension (2026-11-12)
+
+`vscode-extension/` v0.1.0 exists (TASK-040, ADR-014). It is a client of `guild ui`; any API
+change in `ui/server.py` must keep `vscode-extension/test/e2e.test.js` green. The e2e test also
+proves the Python side against an Ollama-shaped stream (all tool calls on index 0). Not yet
+done: a manual click-through in real VS Code on Windows. On the owner's machine `guild.command`
+must point at `C:\Machine Learning projects\guild\.venv\Scripts\guild.exe` unless that venv
+is on PATH. Owner decided the web dashboard may vendor Monaco for an IDE layout (ADR-015,
+TASK-041, not started).
 
 ## Audit 2026-10-02 (what was wrong and what changed)
 

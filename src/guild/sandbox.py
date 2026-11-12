@@ -13,8 +13,11 @@ import os
 import shutil
 import signal
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
+
+from .providers.base import Cancelled
 
 SECRET_HINTS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
 
@@ -41,6 +44,7 @@ class LocalSandbox:
 
     def __init__(self, root: Path):
         self.root = root
+        self.cancel = None  # threading.Event; when set, a running command is killed
 
     def run(self, command: str, timeout: int = 120) -> RunResult:
         # Popen + process group so a timeout kills the whole tree. With subprocess.run() on
@@ -62,16 +66,24 @@ class LocalSandbox:
             errors="replace",
             **kwargs,
         )
-        try:
-            out, _ = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            _kill_tree(proc)
+        deadline = time.monotonic() + timeout
+        while True:
             try:
-                out, _ = proc.communicate(timeout=15)
+                # short waits so a cancel (owner pressed stop) ends a 10-minute test run now
+                out, _ = proc.communicate(timeout=max(0.05, min(0.5, deadline - time.monotonic())))
+                return RunResult(proc.returncode, out or "")
             except subprocess.TimeoutExpired:
-                out = ""
-            return RunResult(124, f"{out or ''}\n[timed out after {timeout}s]", timed_out=True)
-        return RunResult(proc.returncode, out or "")
+                cancelled = self.cancel is not None and self.cancel.is_set()
+                if not cancelled and time.monotonic() < deadline:
+                    continue
+                _kill_tree(proc)
+                try:
+                    out, _ = proc.communicate(timeout=15)
+                except subprocess.TimeoutExpired:
+                    out = ""
+                if cancelled:
+                    raise Cancelled() from None
+                return RunResult(124, f"{out or ''}\n[timed out after {timeout}s]", timed_out=True)
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -110,6 +122,12 @@ class DockerSandbox:
             "--cpus",
             "2",
         ]
+        # .git and .guild are mounted read-only on top of the project: a command in the
+        # container must not plant a git hook or edit git/guild config, because git and guild
+        # then run on the host — outside the sandbox — and would execute it.
+        for protected in (".git", ".guild"):
+            if (self.root / protected).is_dir():
+                args += ["-v", f"{(self.root / protected).resolve()}:/work/{protected}:ro"]
         if not self.network:
             args += ["--network", "none"]
         args += [self.image, "sh", "-c", command]
@@ -124,10 +142,12 @@ class DockerSandbox:
             )
         except subprocess.TimeoutExpired:
             return RunResult(124, f"[timed out after {timeout}s]", timed_out=True)
-        return RunResult(r.returncode, r.stdout + r.stderr)
+        return RunResult(r.returncode, (r.stdout or "") + (r.stderr or ""))
 
 
 def make_sandbox(root: Path, kind: str, image: str = "python:3.11-slim"):
     if kind == "docker":
         return DockerSandbox(root, image)
+    if kind != "local":
+        raise ValueError(f"unknown sandbox {kind!r} (use 'local' or 'docker')")
     return LocalSandbox(root)

@@ -150,15 +150,27 @@ class OpenAICompatProvider:
         }
         if tools:
             kwargs["tools"] = _to_openai_tools(tools)
-        try:
-            if on_token is None:
-                resp = client.chat.completions.create(**kwargs)
-                return self._from_response(resp, full)
-            return self._stream(client, kwargs, full, on_token)
-        except ProviderError:
-            raise
-        except Exception as e:
-            raise _classify(full, e) from e
+        # A 400 that names a parameter is fixable: newer OpenAI models take
+        # max_completion_tokens instead of max_tokens and reject a custom temperature; some
+        # compatible servers do not know stream_options. Adapt and retry instead of marking
+        # the model dead for the whole run.
+        for _ in range(4):
+            try:
+                if on_token is None:
+                    plain = {k: v for k, v in kwargs.items() if k != "stream_options"}
+                    resp = client.chat.completions.create(**plain)
+                    return self._from_response(resp, full)
+                return self._stream(client, kwargs, full, on_token)
+            except ProviderError:
+                raise
+            except Exception as e:
+                adapted = (
+                    _adapt_kwargs(kwargs, str(e)) if type(e).__name__ == "BadRequestError" else None
+                )
+                if adapted is None:
+                    raise _classify(full, e) from e
+                kwargs = adapted
+        raise ProviderError(full, "bad request: could not adapt parameters", retryable=False)
 
     @staticmethod
     def _from_response(resp, full: str) -> Completion:
@@ -194,9 +206,12 @@ class OpenAICompatProvider:
         calls: dict[int, dict] = {}  # index -> {id, name, args}
         usage = Usage()
         finish = ""
-        stream = client.chat.completions.create(
-            stream=True, stream_options={"include_usage": True}, **kwargs
-        )
+        kwargs = dict(kwargs)
+        stream_options = kwargs.pop("stream_options", {"include_usage": True})
+        if stream_options is not None:
+            kwargs["stream_options"] = stream_options
+        stream = client.chat.completions.create(stream=True, **kwargs)
+        remap: dict[int, int] = {}  # provider index -> our slot, when an index is reused
         for chunk in stream:
             if getattr(chunk, "usage", None):
                 usage = Usage(
@@ -217,9 +232,18 @@ class OpenAICompatProvider:
                 on_token(content)
             for n, tc in enumerate(delta.tool_calls or []):
                 idx = tc.index if getattr(tc, "index", None) is not None else n
-                slot = calls.setdefault(idx, {"id": "", "name": "", "args": ""})
-                if getattr(tc, "id", None):
-                    slot["id"] = tc.id
+                key = remap.get(idx, idx)
+                tc_id = getattr(tc, "id", None)
+                cur = calls.get(key)
+                if cur and tc_id and cur["id"] and tc_id != cur["id"]:
+                    # Ollama and Gemini send every tool call of a turn with index 0. A new id
+                    # on a used index is a new call, not more of the previous one (appending
+                    # produced names like "read_filewrite_file" and unparseable arguments).
+                    key = max(calls) + 1
+                    remap[idx] = key
+                slot = calls.setdefault(key, {"id": "", "name": "", "args": ""})
+                if tc_id:
+                    slot["id"] = tc_id
                 fn = getattr(tc, "function", None)
                 if fn is not None:
                     if getattr(fn, "name", None):
@@ -239,6 +263,21 @@ class OpenAICompatProvider:
             model=full,
             stop_reason=finish,
         )
+
+
+def _adapt_kwargs(kwargs: dict, error: str) -> dict | None:
+    """Return kwargs changed to satisfy a 'bad request' complaint, or None if nothing applies."""
+    err = error.lower()
+    new = dict(kwargs)
+    if "max_completion_tokens" in err and "max_tokens" in new:
+        new["max_completion_tokens"] = new.pop("max_tokens")
+    elif "temperature" in err and "temperature" in new:
+        del new["temperature"]
+    elif "stream_options" in err and new.get("stream_options", True) is not None:
+        new["stream_options"] = None  # _stream() then omits it
+    else:
+        return None
+    return new
 
 
 def _classify(model: str, e: Exception) -> ProviderError:

@@ -60,3 +60,35 @@ them so tests always cover the dashboard.
 `guild` on PyPI belongs to Guild AI (an unrelated ML tool). Ours is `guild-ai`; the console
 command is still `guild`. If `guild-ai` turns out to be taken, rename the distribution, not
 the command (see TASKS.md TASK-010).
+
+## ADR-014 VS Code extension: a thin JavaScript client of the dashboard API
+The IDE is VS Code; guild does not grow its own editor there. `vscode-extension/` starts
+`guild ui --no-browser` for the opened folder and uses the same HTTP API + event stream as the
+web dashboard, so there is one backend and no second implementation of the workflow (ADR-001
+stays: the core is Python). The extension is plain CommonJS with no dependencies and no build
+step, in the spirit of the single-file dashboard. All HTTP is done from the extension host: the
+server refuses cross-origin requests, and the chat webview only exchanges messages with the
+extension. Cancelling a job = restarting the server (there is no cancel endpoint yet).
+
+## ADR-015 IDE-style web dashboard may vendor Monaco (accepted 2026-11-12, not built yet)
+An IDE layout for `guild ui` (file tree, editor tabs, diff, log/chat panels) needs a real code
+editor. The owner chose to vendor the Monaco editor inside the package rather than keep a plain
+text area. This relaxes the RULES.md line "single `index.html` … no external scripts" to: no
+build step, nothing loaded from the network, Monaco shipped as package data. Update RULES.md in
+the same change that adds it (TASK-041).
+
+## ADR-016 Pair mode: approval gate in the tool layer, no branch
+Interactive pair programming (`guild pair`, `/api/pair`) is a second way to work next to the
+plan → run → review pipeline, not a replacement. Decisions:
+- The gate lives in `tools.registry.dispatch` (`ToolContext.approver`): before a mutating tool
+  runs, `approval_request()` builds what the owner sees (unified diff + full proposed content,
+  or the command) and the approver answers. It is an *additional* gate: path scoping,
+  `.git`/`.guild` protection, the role's tool list and the `.env` rule all still apply, and a
+  call that would be refused anyway is never shown for approval.
+- Fail closed: no approver → nothing that needs approval happens.
+- Inspection commands (the read-only allowlist: pytest, git status, ls …) do not ask.
+- Pair works in the owner's working tree and never commits; "guild only commits on a branch it
+  created" is untouched. The owner reviews live and commits themselves.
+- Cancel is cooperative (`Cancelled`, a BaseException so no `except Exception` swallows it):
+  checked before model calls, mid-stream, between tool calls, while a command runs and while
+  an approval is pending. `POST /api/cancel` ends any job; a cancelled task returns to todo.

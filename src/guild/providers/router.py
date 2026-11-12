@@ -12,7 +12,7 @@ from typing import Protocol
 
 from ..config import Profile
 from .anthropic_provider import AnthropicProvider
-from .base import Completion, Message, NotConfigured, ProviderError, ToolSpec, Usage
+from .base import Cancelled, Completion, Message, NotConfigured, ProviderError, ToolSpec, Usage
 from .openai_compat import ENDPOINTS, OpenAICompatProvider
 
 OnToken = Callable[[str], None]
@@ -31,7 +31,8 @@ class Provider(Protocol):
 
 
 # USD per 1M tokens (input, output). Approximate list prices; used for *estimates* only.
-# Anything not listed (local models, unknown) is costed at 0. Override in .guild/prices.yaml.
+# Anything not listed (local models, unknown) is costed at 0. Override in .guild/prices.yaml
+# (see load_prices below).
 DEFAULT_PRICES: dict[str, tuple[float, float]] = {
     "anthropic/claude-fable-5-1": (15.0, 75.0),
     "anthropic/claude-opus-5": (15.0, 75.0),
@@ -46,6 +47,34 @@ DEFAULT_PRICES: dict[str, tuple[float, float]] = {
     "groq/llama-3.3-70b-versatile": (0.59, 0.79),
     "groq/llama-3.1-8b-instant": (0.05, 0.08),
 }
+
+
+def load_prices(path) -> dict[str, tuple[float, float]]:
+    """Read price overrides: `provider/model: [input, output]` (USD per 1M tokens) or a single
+    number for both. Use 0 for a model you get on a free tier. Bad entries are skipped."""
+    import yaml
+
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    out: dict[str, tuple[float, float]] = {}
+    if not isinstance(data, dict):
+        return out
+    for model, v in data.items():
+        try:
+            if isinstance(v, (list, tuple)) and len(v) == 2:
+                price = (float(v[0]), float(v[1]))
+            elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                price = (float(v), float(v))
+            else:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if price[0] >= 0 and price[1] >= 0:
+            out[str(model)] = price
+    return out
 
 
 class BudgetExceeded(RuntimeError):
@@ -131,6 +160,7 @@ class Router:
         self._dead: set[str] = set()  # models that failed non-retryably this run
         self._sticky: dict[str, str] = {}  # slot -> last model that worked
         self._overrides: dict[str, Provider] = {}
+        self.cancel = None  # threading.Event set by Guild; checked before every model call
 
     # -- test hook ---------------------------------------------------------
     def register_provider(self, prefix: str, provider: Provider) -> None:
@@ -166,6 +196,8 @@ class Router:
         role: str = "",
         on_token: OnToken | None = None,
     ) -> Completion:
+        if self.cancel is not None and self.cancel.is_set():
+            raise Cancelled()
         if self.max_usd is not None and self.max_usd > 0 and self.tracker.total_usd >= self.max_usd:
             raise BudgetExceeded(
                 f"run cost ${self.tracker.total_usd:.3f} reached cap ${self.max_usd:.2f}"
@@ -179,6 +211,23 @@ class Router:
                     ProviderError(full, "model id must be 'provider/model'", retryable=False)
                 )
                 self._dead.add(full)
+                continue
+            if (
+                self.max_usd is not None
+                and self.max_usd == 0
+                and any(self.tracker.prices.get(full, (0.0, 0.0)))
+            ):
+                # free profile: decide BEFORE the request. Checking afterwards (as this did)
+                # means the call was already made and billed, and its answer thrown away.
+                self._dead.add(full)
+                errors.append(
+                    ProviderError(
+                        full,
+                        "has a list price but the profile cap is $0 "
+                        "(free tier? set it to 0 in .guild/prices.yaml)",
+                        retryable=False,
+                    )
+                )
                 continue
             try:
                 provider = self._provider_for(prefix)

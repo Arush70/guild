@@ -40,6 +40,28 @@ review the diff → commit → tick here and update `docs/MEMORY.md`.
 - [ ] TASK-024 Optional CI job that runs the loop against a real Ollama (nightly, non-blocking).
 - [ ] TASK-025 Persist chat history to `.guild/chat.jsonl` so it survives restarts.
 
+## Phase 4 — IDE
+
+- [x] TASK-040 VS Code extension (`vscode-extension/`): starts `guild ui`, plan tree, run /
+      review / merge / discard, chat + live activity view, status bar. `npm test` there.
+      Still to do by hand: install the `.vsix` in real VS Code on Windows and click through
+      it once (the automated test uses a stand-in for the `vscode` module).
+- [ ] TASK-041 IDE-style web dashboard with a vendored Monaco editor (ADR-015): file tree,
+      editor tabs, per-file diff, bottom panel for log/chat. Update RULES.md with it.
+- [x] TASK-042 `POST /api/cancel`: stop any job without restarting the server (dashboard *stop*
+      button, extension "Stop Current Job", Ctrl+C in `guild pair`).
+- [x] TASK-030 Pair mode (ADR-016): `pair` role, approval gate with diff preview, modes
+      ask / auto-edits / plan, `guild pair` in the CLI, `/api/pair` + `/api/approve/{id}`,
+      approval UI in the dashboard and the VS Code extension. Also done with it: chat history
+      persists in `.guild/chat.jsonl` (was TASK-025).
+      Still to do: try it on a real model (free: 7b in the `frontier` slot will be weak at this;
+      `lite` is the realistic target) and tune `data/roles/pair.yaml` from the trace.
+- [ ] TASK-031 Pair/chat context: `@path` attaches files; keep tool results across turns (today
+      only the text of earlier turns is replayed); compact long histories with the cheap slot.
+- [ ] TASK-034 Slash commands (`.guild/commands/<name>.md`) and write hooks.
+- [ ] TASK-043 Publish the extension (VS Code Marketplace / Open VSX) once TASK-012 is done;
+      the `arush70` publisher id in `vscode-extension/package.json` must exist there first.
+
 ## Done
 
 - [x] 0.1.0 core loop, roles, profiles, CLI, traces, sandbox

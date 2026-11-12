@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .config import Role
-from .providers import Message, Router, ToolCall
+from .providers import Cancelled, Message, Router, ToolCall
 from .schemas import validate
 from .tools import ToolContext, dispatch, specs_for
 from .trace import Trace
@@ -34,37 +34,43 @@ _JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
 
 
 _THINK_RX = re.compile(r"<think>.*?</think>", re.S)
+# strict=False: small models put raw newlines/tabs inside JSON strings (file contents)
+_DECODER = json.JSONDecoder(strict=False)
 
 
-def extract_json(text: str) -> dict[str, Any] | None:
-    """Pull the first JSON object out of a model reply, tolerating fences and prose."""
-    text = _THINK_RX.sub("", text).strip()
-    if not text:
-        return None
-    for cand in (text, *(m.group(1) for m in _JSON_BLOCK.finditer(text))):
-        try:
-            v = json.loads(cand)
-            if isinstance(v, dict):
-                return v
-        except json.JSONDecodeError:
-            pass
-    # last resort: every balanced top-level {...} in the text; the final one is the answer
-    # (deepseek-r1 style replies put reasoning, often with braces, before the JSON)
-    dec = json.JSONDecoder()
-    found: list[dict[str, Any]] = []
+def _json_objects(text: str) -> list[Any]:
+    """Every top-level JSON object in free text, found with a real JSON decoder so braces
+    inside strings (code!) never confuse the scan."""
+    found: list[Any] = []
     i = 0
     while True:
         i = text.find("{", i)
         if i < 0:
-            break
+            return found
         try:
-            v, end = dec.raw_decode(text, i)
+            v, end = _DECODER.raw_decode(text, i)
         except json.JSONDecodeError:
             i += 1
             continue
-        if isinstance(v, dict):
-            found.append(v)
+        found.append(v)
         i = end
+
+
+def extract_json(text: str) -> dict[str, Any] | None:
+    """Pull the first JSON object out of a model reply, tolerating fences and prose."""
+    text = _THINK_RX.sub("", text or "").strip()
+    if not text:
+        return None
+    for cand in (text, *(m.group(1) for m in _JSON_BLOCK.finditer(text))):
+        try:
+            v = json.loads(cand, strict=False)
+            if isinstance(v, dict):
+                return v
+        except json.JSONDecodeError:
+            pass
+    # last resort: every top-level {...} in the text; the final one is the answer
+    # (deepseek-r1 style replies put reasoning, often with braces, before the JSON)
+    found = [v for v in _json_objects(text) if isinstance(v, dict)]
     return found[-1] if found else None
 
 
@@ -83,50 +89,30 @@ def extract_text_tool_calls(text: str, allowed: set[str]) -> list[ToolCall]:
     Recognise {"name": "...", "arguments": {...}} (and common variants), possibly several,
     possibly fenced, and turn them into real ToolCalls. Only names in `allowed` count."""
     calls: list[ToolCall] = []
-    candidates: list[str] = [m.group(1) for m in _JSON_BLOCK.finditer(text)]
-    # also scan for bare top-level objects
-    depth, start = 0, -1
-    for i, ch in enumerate(text):
-        if ch == "{":
-            if depth == 0:
-                start = i
-            depth += 1
-        elif ch == "}" and depth:
-            depth -= 1
-            if depth == 0 and start >= 0:
-                candidates.append(text[start : i + 1])
-    seen: set[str] = set()
-    for cand in candidates:
-        if cand in seen:
+    # reasoning is not an instruction: a call the model only *considered* must not run
+    text = _THINK_RX.sub("", text or "")
+    for o in _json_objects(text):
+        if not isinstance(o, dict):
             continue
-        seen.add(cand)
-        try:
-            obj = json.loads(cand)
-        except json.JSONDecodeError:
-            continue
-        objs = obj if isinstance(obj, list) else [obj]
-        for o in objs:
-            if not isinstance(o, dict):
-                continue
-            for nk, ak in _TOOL_KEYS:
-                name = o.get(nk)
-                if isinstance(name, dict):  # {"function": {"name":..., "arguments":...}}
-                    name, o = name.get("name"), name
-                if isinstance(name, str) and name in allowed and ak in o:
-                    args = o.get(ak)
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args)
-                        except json.JSONDecodeError:
-                            args = {}
-                    calls.append(
-                        ToolCall(
-                            id=f"text_{len(calls)}",
-                            name=name,
-                            arguments=args if isinstance(args, dict) else {},
-                        )
+        for nk, ak in _TOOL_KEYS:
+            name = o.get(nk)
+            if isinstance(name, dict):  # {"function": {"name":..., "arguments":...}}
+                name, o = name.get("name"), name
+            if isinstance(name, str) and name in allowed and ak in o:
+                args = o.get(ak)
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args, strict=False)
+                    except json.JSONDecodeError:
+                        args = {}
+                calls.append(
+                    ToolCall(
+                        id=f"text_{len(calls)}",
+                        name=name,
+                        arguments=args if isinstance(args, dict) else {},
                     )
-                    break
+                )
+                break
     return calls
 
 
@@ -144,6 +130,7 @@ class Agent:
         max_tokens: int = 8192,
         temperature: float = 0.2,
         on_token: Callable[[str, str], None] | None = None,
+        max_tool_calls: int | None = None,
     ):
         self.role = role
         self.router = router
@@ -154,9 +141,33 @@ class Agent:
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.on_token = on_token  # (role, text_chunk) -> None; used for live streaming
+        # tool budget for one run(); a profile can raise/lower it (limits.max_tool_calls_per_task)
+        self.max_tool_calls = role.max_tool_calls if max_tool_calls is None else max_tool_calls
+
+    def _dispatch(self, name: str, args: dict[str, Any]) -> str:
+        """Run a tool, but only one this role was given. Models can emit a call to any name
+        (hallucinated, or copied from a file they read); the registry knows them all."""
+        if name not in self.role.tools:
+            self.ctx.tool_calls_made += 1
+            return (
+                f"refused: tool '{name}' is not available to this role "
+                f"(available: {', '.join(self.role.tools) or 'none'})"
+            )
+        if self._cancelled():
+            raise Cancelled()
+        return dispatch(self.ctx, name, args)
+
+    def _cancelled(self) -> bool:
+        ev = getattr(self.router, "cancel", None)
+        return ev is not None and ev.is_set()
 
     def _complete(self, messages: list[Message], tools, *, temperature: float | None = None):
-        cb = (lambda chunk: self.on_token(self.role.name, chunk)) if self.on_token else None
+        def stream(chunk: str) -> None:
+            if self._cancelled():  # stop a long generation mid-stream, not only between calls
+                raise Cancelled()
+            self.on_token(self.role.name, chunk)
+
+        cb = stream if self.on_token else None
         comp = self.router.complete(
             self.slot,
             messages,
@@ -205,11 +216,11 @@ class Agent:
         model_used = ""
         last_text = ""
 
-        for _ in range(self.role.max_tool_calls + 2):
+        for _ in range(self.max_tool_calls + 2):
             comp = self._complete(messages, tools)
             model_used = comp.model
             messages.append(comp.message)
-            last_text = comp.message.content
+            last_text = comp.message.content or ""
 
             if not comp.message.tool_calls and tools:
                 # fallback: tool call written as plain text
@@ -222,7 +233,7 @@ class Agent:
                     )
                     results = []
                     for tc in text_calls:
-                        result = dispatch(self.ctx, tc.name, tc.arguments)
+                        result = self._dispatch(tc.name, tc.arguments)
                         ok = not result.startswith(
                             ("refused:", "unknown tool:", "tool error", "bad arguments")
                         )
@@ -243,7 +254,7 @@ class Agent:
                             "and reply with your final JSON when done.",
                         )
                     )
-                    if self.ctx.tool_calls_made >= self.role.max_tool_calls:
+                    if self.ctx.tool_calls_made >= self.max_tool_calls:
                         messages.append(
                             Message(
                                 "user", "Tool budget exhausted. Reply now with your final JSON."
@@ -254,18 +265,20 @@ class Agent:
             if not comp.message.tool_calls:
                 break
 
-            if self.ctx.tool_calls_made >= self.role.max_tool_calls:
-                messages.append(
-                    Message("user", "Tool budget exhausted. Reply now with your final JSON.")
-                )
+            if self.ctx.tool_calls_made >= self.max_tool_calls:
+                # tool results must directly follow the assistant's tool calls (OpenAI and
+                # Anthropic reject the request otherwise); the instruction comes after them
                 for tc in comp.message.tool_calls:
                     messages.append(
                         Message("tool", "tool budget exhausted", tool_call_id=tc.id, name=tc.name)
                     )
+                messages.append(
+                    Message("user", "Tool budget exhausted. Reply now with your final JSON.")
+                )
                 continue
 
             for tc in comp.message.tool_calls:
-                result = dispatch(self.ctx, tc.name, tc.arguments)
+                result = self._dispatch(tc.name, tc.arguments)
                 ok = not result.startswith(
                     ("refused:", "unknown tool:", "tool error", "bad arguments")
                 )

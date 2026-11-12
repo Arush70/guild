@@ -62,3 +62,61 @@
 - First release: lead / engineer / verifier / critic / security / docs / researcher roles,
   free / lite / pro profiles, fallback router with cost tracking, JSONL traces,
   local and Docker sandboxes, CLI (`init doctor plan status run review ask cost roles`).
+- Break-it audit (2026-11-12) — 101 new tests in `tests/test_hardening.py` and
+  `tests/test_hardening_io.py`. Safety:
+  - Read-only command allowlist could be bypassed with a single `&`, a newline, `find -delete` /
+    `-exec`, `git branch -D`, `sort -o`, `uniq IN OUT`, `--output=`, `rg --pre`, `ruff --add-noqa`.
+  - `git_diff` passed `ref` straight to git (`--output=<path>` wrote anywhere on disk).
+  - `write_file` / `edit_file` could write into `.git/` (hooks run on the host) and `.guild/`
+    (config, roles, plan). Both are refused now; the Docker sandbox mounts them read-only.
+  - An agent could call any registered tool, not only the ones in its role's `tools:` list.
+  - `read_file` / `search` no longer return `.env` files; `search` no longer follows a symlink
+    out of the project; `web_fetch` refuses localhost, private and metadata addresses.
+  - Dashboard: requests for a non-localhost `Host` and cross-site POSTs are refused (DNS
+    rebinding / CSRF); `esc()` now escapes quotes (task ids and file names sit in attributes).
+  - A typo in `sandbox:` silently meant "local"; it is a validation error now.
+  - Free profile: priced models were refused *after* the request had been sent. Checked before
+    the call now. `.guild/prices.yaml` (documented, never implemented) overrides list prices.
+- Workflow:
+  - Files created after a "blocked" push-back were never committed (missing from the branch and
+    from the reviewers' diff). New untracked files were also invisible to reviewers whenever
+    guild had not created a branch.
+  - `git commit` failures were silent; without `user.name`/`user.email` an accepted task had an
+    empty branch. Falls back to a `guild` identity and warns on any commit failure.
+  - A model-written task id like `Task 1: setup` produced an invalid branch name and crashed the
+    task. Ids are normalised and de-duplicated in the plan schema.
+  - Ctrl+C left the task `in_progress` forever (never picked again). Interrupted tasks go back
+    to `todo`; a stale `in_progress` is runnable.
+  - Deleting a task left dangling `depends_on` → `KeyError` in run-selected and a dependant
+    that never ran. A Lead REVISE/REPLAN lost its notes. `revise_plan` dropped `merged`.
+  - Dashboard merge always went into main/master; it now merges into the branch the task
+    started from (`Task.base`). Discard only deletes `guild/` branches.
+  - A git error message could be handed to reviewers as "the diff".
+  - `limits.max_tool_calls_per_task` was never read; it now sets the Engineer's tool budget.
+- Small-model tolerance: text tool calls with a brace inside file content (or raw newlines in
+  JSON strings) were dropped; tool calls written inside `<think>` were executed; string numbers
+  and extra keys in tool arguments failed the call; streamed tool calls sharing index 0 (Ollama,
+  Gemini) were merged into one; `depends_on: [1]` and "accepted"/"approve" failed validation.
+- Providers: tool results now directly follow the tool calls when the budget runs out (OpenAI
+  and Anthropic reject the old order); the Anthropic JSON-repair turn no longer sends tool
+  blocks without tools or empty text; a 400 naming `max_tokens` / `temperature` /
+  `stream_options` is adapted and retried instead of killing the model for the run.
+- `edit_file` / overwrite keep a file's line endings (LF or CRLF) instead of rewriting the file.
+- Dashboard/CLI robustness: reading a trace that is being written no longer 500s; plan edits
+  are validated and refused while a job holds the plan; `/api/config` validates; `guild run
+  NOPE`, an invalid config and model text containing rich markup no longer end in a traceback;
+  `guild init` keeps hand-edited config fields.
+- VS Code extension (`vscode-extension/`, v0.1.0): Guild side bar with the plan as a task tree
+  (run, review changes in VS Code's diff, merge, discard, edit), a Chat & Activity view with
+  live streaming, a status bar item, doctor and run-trace views. It starts `guild ui` itself and
+  uses the dashboard API; plain JavaScript, no dependencies. Tested end to end against a real
+  guild server and a scripted model (`npm test`), not yet inside a real VS Code window.
+- Pair mode (interactive, ADR-016): `guild pair` terminal session, `/api/pair`, the `pair` role.
+  The agent edits the working tree and runs commands; every file change (shown as a diff) and
+  every non-inspection command waits for the owner's approval. Modes: ask / auto-edits / plan.
+  Approval UI in the dashboard (mode selector + dialog) and the VS Code extension (card in the
+  chat view, notification, proposal opened in the diff editor).
+- Cancel: `POST /api/cancel`, a *stop* button in the dashboard, "Stop Current Job" in VS Code,
+  Ctrl+C in `guild pair`. Stops mid-generation, between tool calls, kills a running command.
+- Chat history persists across restarts (`.guild/chat.jsonl`).
+- VS Code extension 0.2.0: pair modes in the chat view, approvals, real Stop.

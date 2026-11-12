@@ -129,12 +129,31 @@ as-is.
 | `guild run [T1 T3 ...] [--all] [-y] [--skip security,docs]` | implement task(s) through the full loop |
 | `guild review [--ref main] [--security-only]` | Critic + Security on the current diff, nothing else |
 | `guild ask ROLE "question"` | ask one role (e.g. `researcher`, `security`) about the project |
+| `guild pair ["request"] [--mode ask\|auto-edits\|plan]` | pair-program in the terminal: an agent that edits your working tree and asks before every change |
 | `guild cost` | token + estimated cost table from saved traces |
 | `guild roles` | list roles and profiles (built-in + project overrides) |
 | `guild ui [--port 7331]` | local web dashboard |
 | `guild watch [--roles critic,security,performance] [--once]` | review every new commit as it lands |
 
 `-p PROFILE` overrides the profile for one command. `-C DIR` runs against another project.
+
+## Pair programming (interactive mode)
+
+The pipeline (`guild run`) works on its own branch and hands you a diff at the end. Pair mode is
+the other way of working: a chat where the agent reads, edits and runs commands in your working
+tree while you watch, and **every file change and every non-inspection command waits for your
+approval**. No branch, no commit — you are the reviewer.
+
+```
+guild pair "add a --verbose flag to cli.py"      # or just `guild pair` and type
+```
+
+It shows a diff and asks `apply? [y]es / [n]o / [a]ll edits this session`; anything else you
+type is sent back to the agent as the reason. `/mode plan` makes it read-only (explore and
+propose), `/mode auto-edits` applies file edits directly and still asks for commands. Ctrl+C
+cancels the current turn. The same thing is available in the dashboard chat (mode selector next
+to *send*, plus a *stop* button) and in the VS Code extension (`vscode-extension/`), where the
+proposed change opens in VS Code's diff editor.
 
 ## Roles
 
