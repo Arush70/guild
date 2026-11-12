@@ -1,0 +1,36 @@
+body { padding: 0; margin: 0; display: flex; flex-direction: column; height: 100vh; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); }
+#tabs { display: flex; border-bottom: 1px solid var(--vscode-panel-border); flex: none; }
+#tabs button { flex: 1; background: none; color: var(--vscode-foreground); border: 0; border-bottom: 2px solid transparent; padding: 6px 4px; cursor: pointer; opacity: .7; font: inherit; }
+#tabs button.on { border-bottom-color: var(--vscode-focusBorder); opacity: 1; }
+#status { flex: none; padding: 4px 8px; font-size: .9em; color: var(--vscode-descriptionForeground); border-bottom: 1px solid var(--vscode-panel-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#status.busy::before { content: '● '; color: var(--vscode-charts-blue); }
+.pane { flex: 1; overflow-y: auto; padding: 8px; display: none; }
+.pane.on { display: block; }
+.msg { margin: 0 0 10px; }
+.msg .who { font-size: .85em; color: var(--vscode-descriptionForeground); margin-bottom: 2px; }
+.msg .body { white-space: pre-wrap; word-wrap: break-word; padding: 6px 8px; border-radius: 4px; background: var(--vscode-editor-inactiveSelectionBackground); }
+.msg.user .body { background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); }
+.msg.live .body { opacity: .85; border-left: 2px solid var(--vscode-charts-blue); }
+.msg.error .body { border-left: 2px solid var(--vscode-errorForeground); }
+.empty { color: var(--vscode-descriptionForeground); padding: 12px 4px; }
+#log { font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size); white-space: pre-wrap; word-wrap: break-word; }
+#log .bad { color: var(--vscode-errorForeground); }
+#log .ok { color: var(--vscode-testing-iconPassed, var(--vscode-charts-green)); }
+#log .phase { color: var(--vscode-charts-blue); }
+#log .warn { color: var(--vscode-editorWarning-foreground); }
+#live { flex: none; max-height: 30%; overflow-y: auto; margin: 0; padding: 6px 8px; border-top: 1px solid var(--vscode-panel-border); font-family: var(--vscode-editor-font-family); font-size: .9em; white-space: pre-wrap; word-wrap: break-word; color: var(--vscode-descriptionForeground); display: none; }
+#live.on { display: block; }
+#composer { flex: none; display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px; border-top: 1px solid var(--vscode-panel-border); }
+#mode { flex: 1 0 100%; background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border: 1px solid var(--vscode-dropdown-border, transparent); padding: 2px; font: inherit; }
+.approval { margin: 0 0 10px; border: 1px solid var(--vscode-focusBorder); border-radius: 4px; padding: 6px 8px; }
+.approval .what { font-weight: 600; margin-bottom: 4px; word-break: break-all; }
+.approval pre { margin: 0 0 6px; max-height: 220px; overflow: auto; font-family: var(--vscode-editor-font-family); font-size: .9em; white-space: pre; }
+.approval .add { color: var(--vscode-gitDecoration-addedResourceForeground, var(--vscode-charts-green)); }
+.approval .del { color: var(--vscode-gitDecoration-deletedResourceForeground, var(--vscode-charts-red)); }
+.approval .acts { display: flex; flex-wrap: wrap; gap: 4px; }
+.approval button { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 0; border-radius: 2px; padding: 3px 8px; cursor: pointer; font: inherit; }
+.approval button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+#input { flex: 1; resize: none; min-height: 34px; max-height: 140px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent); border-radius: 2px; padding: 6px; font: inherit; }
+#input:focus { outline: 1px solid var(--vscode-focusBorder); }
+#send { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: 0; border-radius: 2px; padding: 0 12px; cursor: pointer; font: inherit; }
+#send:disabled { opacity: .5; cursor: default; }

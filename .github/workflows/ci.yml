@@ -14,3 +14,6 @@ jobs:
       - run: ruff check src tests
       - run: ruff format --check src tests
       - run: pytest -q
+      - name: VS Code extension tests (uses the installed guild)
+        run: npm test
+        working-directory: vscode-extension
