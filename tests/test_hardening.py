@@ -604,6 +604,13 @@ def test_commit_works_without_a_git_identity(project, cfg, profile, monkeypatch,
     (project / "notes.txt").write_text("x\n")
     subprocess.run(["git", "add", "-A"], cwd=project, check=True)
     subprocess.run(["git", "commit", "-qm", "notes"], cwd=project, check=True)
+    # Hiding the global/system config below must not also change line-ending handling: on
+    # Windows core.autocrlf=true comes from there, and without it every CRLF file suddenly
+    # looks modified (a dirty tree, so guild rightly makes no branch). Pin the current value.
+    autocrlf = subprocess.run(
+        ["git", "config", "--get", "core.autocrlf"], cwd=project, capture_output=True, text=True
+    ).stdout.strip()
+    subprocess.run(["git", "config", "core.autocrlf", autocrlf or "false"], cwd=project, check=True)
     subprocess.run(["git", "config", "--unset", "user.email"], cwd=project, check=True)
     subprocess.run(["git", "config", "--unset", "user.name"], cwd=project, check=True)
     empty = tmp_path / "emptyhome"
@@ -628,6 +635,10 @@ def test_commit_works_without_a_git_identity(project, cfg, profile, monkeypatch,
     finally:
         g.close()
     assert out.accepted
+    status = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=project, capture_output=True, text=True
+    ).stdout
+    assert out.task.branch, f"no branch was created; git status:\n{status}"
     log = subprocess.run(
         ["git", "log", "--oneline", "-3"], cwd=project, capture_output=True, text=True
     ).stdout
