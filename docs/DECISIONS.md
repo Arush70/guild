@@ -101,3 +101,16 @@ a private `Guild` method. Results that cross a module boundary are objects (`Ver
 `ToolResult`, `TaskOutcome.reviews`), not dicts or text to be searched. New code follows the
 same question: should these pieces change together? The reasoning for each move is in
 `docs/UNTANGLE.md`.
+
+## ADR-018 One guild process per project (accepted 2026-11-12)
+Planning, running tasks and pairing switch branches, edit files and rewrite plan.json, and
+two dashboards on one folder are easy to get (a terminal's `guild ui` plus the VS Code
+extension's). Those entry points take `ProjectLock`: an OS file lock on `.guild/lock`
+(`fcntl.flock` / `msvcrt.locking`), so a crashed process never leaves a stale lock. Read-only
+work (chat, ask, review, status) takes no lock.
+
+## ADR-019 No known price, no call under a cap (accepted 2026-11-12)
+The router refused models with a list price under a $0 cap, but a hosted model missing from
+the price table was costed at $0 and passed any cap. A cap that cannot be computed is not
+kept, so such a model is refused before the request with a message pointing to
+`.guild/prices.yaml`. Local endpoints are exempt; a profile without a cap is unaffected.

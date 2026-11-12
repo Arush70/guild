@@ -11,12 +11,21 @@ from __future__ import annotations
 
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import TypeVar
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
-from .paths import CACHE_DIRS, PROTECTED_DIRS, ProjectPaths
+from .paths import CACHE_DIRS, PROTECTED_DIRS, ProjectPaths, atomic_write_text
+
+_M = TypeVar("_M", bound=BaseModel)
 
 
 class Limits(BaseModel):
@@ -117,12 +126,24 @@ def _package_data(sub: str) -> Path:
     return Path(str(resources.files("guild").joinpath("data", sub)))
 
 
-def _load_yaml(path: Path) -> dict[str, Any]:
-    with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    if not isinstance(data, dict):
-        raise ValueError(f"{path} must contain a mapping")
-    return data
+class ConfigError(ValueError):
+    """A config, profile or role file that cannot be used. The message names the file and the
+    first problem in one line, for a terminal or the dashboard."""
+
+
+def _load(model: type[_M], path: Path) -> _M:
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        if not isinstance(data, dict):
+            raise ValueError("must contain a mapping (key: value lines)")
+        return model.model_validate(data)
+    except ValidationError as e:
+        first = e.errors()[0]
+        where = ".".join(str(x) for x in first["loc"])
+        raise ConfigError(f"{path}: {where}: {first['msg']}") from None
+    except (yaml.YAMLError, UnicodeDecodeError, ValueError) as e:
+        raise ConfigError(f"{path}: {' '.join(str(e).split())[:200]}") from None
 
 
 def _find(kind: str, name: str, project: Path | None) -> Path:
@@ -142,11 +163,11 @@ def _find(kind: str, name: str, project: Path | None) -> Path:
 
 
 def load_profile(name: str, project: Path | None = None) -> Profile:
-    return Profile.model_validate(_load_yaml(_find("profiles", name, project)))
+    return _load(Profile, _find("profiles", name, project))
 
 
 def load_role(name: str, project: Path | None = None) -> Role:
-    return Role.model_validate(_load_yaml(_find("roles", name, project)))
+    return _load(Role, _find("roles", name, project))
 
 
 def list_available(kind: str, project: Path | None = None) -> list[str]:
@@ -162,22 +183,24 @@ def load_project_config(project: Path) -> ProjectConfig:
     path = ProjectPaths(project).config
     if not path.exists():
         return ProjectConfig()
-    return ProjectConfig.model_validate(_load_yaml(path))
+    return _load(ProjectConfig, path)
 
 
 def save_project_config(project: Path, cfg: ProjectConfig) -> Path:
     path = ProjectPaths(project).config
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(cfg.model_dump(), f, sort_keys=False)
+    atomic_write_text(path, yaml.safe_dump(cfg.model_dump(), sort_keys=False))
     return path
 
 
 def find_project_root(start: Path | None = None) -> Path:
-    """Walk up until a directory containing .guild/ or .git/ is found; else cwd."""
+    """Walk up until a directory with .guild/config.yaml or .git/ is found; else `start`."""
     p = (start or Path.cwd()).resolve()
+    home = Path.home().resolve()
     for cand in [p, *p.parents]:
+        if cand == home and cand != p:
+            break  # a folder under home is never "inside" the home directory as a project
         paths = ProjectPaths(cand)
-        if paths.guild_dir.is_dir() or paths.has_git:
+        # config.yaml, not the bare directory: ~/.guild only holds the dashboard's recent list
+        if paths.initialised or paths.has_git:
             return cand
     return p

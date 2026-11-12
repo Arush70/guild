@@ -195,15 +195,17 @@ const api = async (path, body) => {
   if (!r.ok) { const t = await r.text(); throw new Error(t.slice(0, 300)); }
   return r.json();
 };
+// values that should be numbers but come from files and model providers: never markup
+const num = v => typeof v === 'number' && isFinite(v) ? v : esc(v ?? '?');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let ROLES = [];  // from /api/state: every role this project has
-let state = null, agentStats = {};
+let state = null, agentStats = {}, shownConfigError = null;
 
 // ---------- team panel
 function renderTeam() {
   $('#team').innerHTML = ROLES.map(r => {
     const s = agentStats[r] || {};
-    return `<div class="agent ${s.state||''}" id="ag-${r}"><span class="dot"></span><span class="name">${r}</span><span class="model" title="${esc(s.model||'')}">${esc(s.model||'—')}</span><span class="n">${s.calls? s.calls+'×':''}</span></div>`;
+    return `<div class="agent ${esc(s.state||'')}" ><span class="dot"></span><span class="name">${esc(r)}</span><span class="model" title="${esc(s.model||'')}">${esc(s.model||'—')}</span><span class="n">${s.calls? num(s.calls)+'×':''}</span></div>`;
   }).join('');
 }
 function setAgent(r, patch) { agentStats[r] = Object.assign(agentStats[r]||{}, patch); renderTeam(); }
@@ -266,6 +268,8 @@ async function refresh() {
   // a pair turn is waiting for an answer (page reloaded, or the dialog was dismissed)
   if (state.pending_approvals?.length && !approvalOpen) showApproval(state.pending_approvals[0]);
   $('#root').textContent = state.root;
+  if (state.config_error && state.config_error !== shownConfigError) logLine('job_error', 'config: ' + state.config_error);
+  shownConfigError = state.config_error;
   if (ROLES.join() !== state.roles.join()) { ROLES = state.roles; renderTeam(); }
   const sel = $('#profile');
   if (sel.options.length === 0) {
@@ -336,7 +340,7 @@ async function doctor() {
     const d = await api('/api/doctor?profile=' + encodeURIComponent($('#profile').value));
     let last = '';
     $('#gitWarn').classList.toggle('hidden', !!d.git);
-    $('#doctor').innerHTML = `<div class="small muted" style="margin-bottom:6px">${esc(d.profile.description)} · git: ${d.git?'<span class=ok>yes</span>':'<span class=no>no</span>'} · cap $${d.profile.limits.max_usd_per_run}/run</div>
+    $('#doctor').innerHTML = `<div class="small muted" style="margin-bottom:6px">${esc(d.profile.description)} · git: ${d.git?'<span class=ok>yes</span>':'<span class=no>no</span>'} · cap $${num(d.profile.limits.max_usd_per_run)}/run</div>
       <table><tr><th>slot</th><th>model</th><th>status</th></tr>${d.rows.map(r => { const s = r.slot===last?'':r.slot; last=r.slot;
         return `<tr><td>${esc(s)}</td><td class="mono">${esc(r.model)}</td><td class="${r.ok?'ok':'no'} mono">${esc(r.status)}</td></tr>`; }).join('')}</table>`;
   } catch (e) { $('#doctor').innerHTML = `<span class="no">${esc(e.message)}</span>`; }
@@ -387,7 +391,7 @@ function renderFiles() {
   const q = $('#fileFilter').value.toLowerCase();
   const list = allFiles.filter(f => !q || f.path.toLowerCase().includes(q)).slice(0, 800);
   $('#ftree').innerHTML = list.map(f => { const i = f.path.lastIndexOf('/'); const dir = i >= 0 ? f.path.slice(0, i + 1) : '';
-    return `<div data-p="${esc(f.path)}" title="${f.size} B"><span class="dir">${esc(dir)}</span>${esc(f.path.slice(i + 1))}</div>`; }).join('');
+    return `<div data-p="${esc(f.path)}" title="${num(f.size)} B"><span class="dir">${esc(dir)}</span>${esc(f.path.slice(i + 1))}</div>`; }).join('');
   $('#ftree').querySelectorAll('div').forEach(el => el.onclick = () => showFile(el.dataset.p));
 }
 $('#fileFilter').oninput = renderFiles;
@@ -404,7 +408,7 @@ async function showFile(path) {
 // ---------- chat
 function renderChat(items) {
   const el = $('#chatLog');
-  el.innerHTML = items.map(m => `<div class="msg ${m.role}">${esc(m.content)}${m.model ? `<span class="m">${esc(m.model)}</span>` : ''}</div>`).join('') || '<div class="muted small">Ask anything about this project. In chat mode the assistant reads files, searches and runs tests but never edits. Switch to a pair mode to let it make changes, with your approval.</div>';
+  el.innerHTML = items.map(m => `<div class="msg ${esc(m.role)}">${esc(m.content)}${m.model ? `<span class="m">${esc(m.model)}</span>` : ''}</div>`).join('') || '<div class="muted small">Ask anything about this project. In chat mode the assistant reads files, searches and runs tests but never edits. Switch to a pair mode to let it make changes, with your approval.</div>';
   el.scrollTop = el.scrollHeight;
 }
 async function loadChat() { try { renderChat(await api('/api/chat')); } catch (err) { console.error('guild: chat not loaded', err); } }
@@ -455,25 +459,25 @@ async function showDiff(id) {
 }
 async function showRun(id) {
   try {
-    const d = await api(`/api/runs/${id}`);
+    const d = await api(`/api/runs/${encodeURIComponent(id)}`);
     const t0 = d.started;
     const rows = d.events.map(e => {
       const t = `<span class="t">+${(e.ts - t0).toFixed(1)}s</span>`;
       switch (e.kind) {
-        case 'phase': return `${t}<span class="phase">▶ ${esc(e.phase)}${e.task_id?' '+esc(e.task_id):''}${e.round?' r'+e.round:''}</span>`;
-        case 'model_call': return `${t}<span class="r">${esc(e.role)}</span><span>${esc(e.model)} · ${e.input_tokens}→${e.output_tokens} tok · ${e.latency_s}s${e.usd?' · $'+e.usd:''}${e.n_tool_calls?' · '+e.n_tool_calls+' tools':''}${!e.n_tool_calls&&e.content_preview?'<br><span class="muted">'+esc(e.content_preview.slice(0,160))+'</span>':''}</span>`;
+        case 'phase': return `${t}<span class="phase">▶ ${esc(e.phase)}${e.task_id?' '+esc(e.task_id):''}${e.round?' r'+num(e.round):''}</span>`;
+        case 'model_call': return `${t}<span class="r">${esc(e.role)}</span><span>${esc(e.model)} · ${num(e.input_tokens)}→${num(e.output_tokens)} tok · ${num(e.latency_s)}s${e.usd?' · $'+num(e.usd):''}${e.n_tool_calls?' · '+num(e.n_tool_calls)+' tools':''}${!e.n_tool_calls&&e.content_preview?'<br><span class="muted">'+esc(String(e.content_preview).slice(0,160))+'</span>':''}</span>`;
         case 'tool_call': return `${t}<span class="r muted">${esc(e.role)}</span><span class="${e.ok?'muted':'bad'}">${esc(e.tool)}(${esc(Object.entries(e.args||{}).map(([k,v])=>k+'='+JSON.stringify(v).slice(0,40)).join(', '))}) → ${esc(String(e.result_preview).slice(0,100).replace(/\n/g,' ⏎ '))}</span>`;
-        case 'verification': return `${t}<span class="r">tests</span><span class="${e.passed?'ok':'bad'}">${e.passed?'PASS':'FAIL'} (${e.tests_run} run)${e.failures?.length?' — '+esc(e.failures.slice(0,3).join('; ')):''}</span>`;
-        case 'decision': return `${t}<span class="r">${esc(e.role)}</span><span class="warn">${esc(e.decision||e.status||'')} ${esc((e.notes||e.summary||'').slice(0,160))}</span>`;
+        case 'verification': return `${t}<span class="r">tests</span><span class="${e.passed?'ok':'bad'}">${e.passed?'PASS':'FAIL'} (${num(e.tests_run)} run)${Array.isArray(e.failures)&&e.failures.length?' — '+esc(e.failures.slice(0,3).join('; ')):''}</span>`;
+        case 'decision': return `${t}<span class="r">${esc(e.role)}</span><span class="warn">${esc(e.decision||e.status||'')} ${esc(String(e.notes||e.summary||'').slice(0,160))}</span>`;
         case 'fallback': return `${t}<span class="r">router</span><span class="warn">fallback: ${esc(e.model)} — ${esc(e.reason)}</span>`;
         case 'note': return `${t}<span class="r muted">${esc(e.role||'')}</span><span class="muted">${esc(e.msg)}</span>`;
-        case 'task_end': return `${t}<span class="r">task</span><span class="${e.accepted?'ok':'bad'}">${esc(e.task_id)} ${e.accepted?'ACCEPTED':'not accepted'} · ${e.rounds} rounds · $${e.cost_usd}</span>`;
+        case 'task_end': return `${t}<span class="r">task</span><span class="${e.accepted?'ok':'bad'}">${esc(e.task_id)} ${e.accepted?'ACCEPTED':'not accepted'} · ${num(e.rounds)} rounds · $${num(e.cost_usd)}</span>`;
         case 'run_start': return `${t}<span class="r">run</span><span class="muted">profile ${esc(e.profile)}</span>`;
-        case 'run_end': return `${t}<span class="r">run</span><span class="ok">finished · $${e.total_usd}</span>`;
+        case 'run_end': return `${t}<span class="r">run</span><span class="ok">finished · $${num(e.total_usd)}</span>`;
         default: return '';
       }
     }).filter(Boolean).join('');
-    const roles = Object.entries(d.by_role).map(([r, v]) => `<tr><td>${esc(r)}</td><td>${v.calls}</td><td>${v.input_tokens.toLocaleString()}</td><td>${v.output_tokens.toLocaleString()}</td><td>${v.latency_s}s</td><td>$${v.usd}</td><td class="mono">${esc(v.models.join(', '))}</td></tr>`).join('');
+    const roles = Object.entries(d.by_role).map(([r, v]) => `<tr><td>${esc(r)}</td><td>${num(v.calls)}</td><td>${num(v.input_tokens)}</td><td>${num(v.output_tokens)}</td><td>${num(v.latency_s)}s</td><td>$${num(v.usd)}</td><td class="mono">${esc((v.models||[]).join(', '))}</td></tr>`).join('');
     openModal(`run ${id}`, `<table style="margin-bottom:12px"><tr><th>role</th><th>calls</th><th>in</th><th>out</th><th>time</th><th>USD</th><th>models</th></tr>${roles}</table><div class="tl">${rows}</div>`);
   } catch (e) { logLine('job_error', e.message); }
 }
@@ -484,7 +488,7 @@ async function loadRuns() {
     const runs = await api('/api/runs');
     const total = runs.reduce((a, r) => a + r.usd, 0);
     $('#runs').innerHTML = runs.length ? `<div class="small muted" style="margin-bottom:6px">est. total $${total.toFixed(4)} over ${runs.length} runs</div>` +
-      runs.map(r => `<div class="kv runrow" data-run="${esc(r.id)}" style="padding:6px 0;border-bottom:1px solid var(--line)"><b>${esc(r.id)}</b><span>${esc(r.profile)} · ${r.calls} calls · ${(r.input_tokens+r.output_tokens).toLocaleString()} tok · $${r.usd}</span><b>phases</b><span class="muted">${esc(r.phases.join(' › '))}</span></div>`).join('')
+      runs.map(r => `<div class="kv runrow" data-run="${esc(r.id)}" style="padding:6px 0;border-bottom:1px solid var(--line)"><b>${esc(r.id)}</b><span>${esc(r.profile)} · ${num(r.calls)} calls · ${num(r.input_tokens+r.output_tokens)} tok · $${num(r.usd)}</span><b>phases</b><span class="muted">${esc(r.phases.join(' › '))}</span></div>`).join('')
       : '<div class="muted small">no runs yet</div>';
     $('#runs').querySelectorAll('.runrow').forEach(el => el.onclick = () => showRun(el.dataset.run));
   } catch (e) { $('#runs').innerHTML = `<span class="no small">${esc(e.message)}</span>`; }

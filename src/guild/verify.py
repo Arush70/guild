@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 _PYTEST_RX = re.compile(r"(\d+) passed|(\d+) failed|(\d+) error", re.I)
+_NOT_RUN_RX = re.compile(r"(\d+) (?:skipped|xfailed|xpassed|deselected)")
 _FAIL_LINE_RX = re.compile(r"^(FAILED|ERROR) (.+?)(?: - (.*))?$", re.M)
 
 
@@ -75,7 +76,12 @@ class Verifier:
             tail += "\n(no tests collected)"
         if exit_code != 0 and not failures:
             failures = [f"{cmd} exited {exit_code}"]
-        v = Verification(exit_code == 0, passed_n + failed_n, failures, tail, cmd, exit_code)
+        # a run that reports failed tests has failed, whatever exit code it ends with (a
+        # conftest hook can set the exit code to 0)
+        ok = exit_code == 0 and failed_n == 0
+        if exit_code == 0 and failed_n and not failures:
+            failures = [f"{failed_n} test(s) failed although {cmd} exited 0"]
+        v = Verification(ok, passed_n + failed_n, failures, tail, cmd, exit_code)
         if self.lint_command and v.passed:
             lint = self.sandbox.run(self.lint_command, timeout=300)
             v.lint_passed = lint.returncode == 0
@@ -85,6 +91,15 @@ class Verifier:
                 v.output_tail += "\n--- lint ---\n" + "\n".join(
                     lint.output.strip().splitlines()[-15:]
                 )
+        idle = sum(int(n) for n in _NOT_RUN_RX.findall(out))
+        if v.passed and baseline and baseline.tests and passed_n + failed_n == 0 and idle:
+            # every test skipped, xfailed or deselected: the suite "passes" without checking
+            # anything (one conftest hook is enough to do that)
+            v.passed = False
+            v.failures.append(
+                f"NO TEST RAN ({idle} skipped, xfailed or deselected): the tests that existed "
+                "before the task must still run"
+            )
         v.removed_tests = self._removed_tests(baseline, v) if baseline else []
         if v.removed_tests:
             v.passed = False

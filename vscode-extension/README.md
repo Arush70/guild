@@ -20,8 +20,8 @@ and talks to it over the same local HTTP API the web dashboard uses. guild itsel
 From this folder:
 
 ```
-npm run package            # builds guild-vscode-0.2.0.vsix (uses npx @vscode/vsce)
-code --install-extension guild-vscode-0.2.0.vsix
+npm run package            # builds guild-vscode-0.2.1.vsix (uses npx @vscode/vsce)
+code --install-extension guild-vscode-0.2.1.vsix
 ```
 
 Or, to try it without packaging: open this folder in VS Code and press F5.

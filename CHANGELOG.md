@@ -126,3 +126,17 @@
   loop (the CLI uses it); the dashboard server works on `Plan`/`Repo` objects, no longer on raw
   dicts or a half-constructed `Guild`. The few visible differences are listed in that file
   ("What still looks different"). 229 tests.
+- Break-it audit 2 (2026-11-12; details in docs/MEMORY.md, tests in `tests/test_hardening3.py`).
+  Security: inspection-command allowlist rewritten (quoting, variables, write/exec/upload
+  options, credential files and paths outside the project); approval gate fails closed and
+  covers `run_tests` arguments, list commands and non-text content; approval text shows hidden
+  characters; more credential files and environment variables protected, also under their
+  Windows aliases; dashboard XSS (role names, trace numbers) and same-origin rule (port
+  included); extension declared unsupported in untrusted workspaces (0.2.1).
+  Behaviour: **a hosted model without a known price is refused under a spending cap** (add
+  it to `.guild/prices.yaml`); one guild process per project (`.guild/lock`); tool budget is
+  per call; verification fails when no pre-existing test ran or failures are reported with
+  exit code 0; sandbox commands get no stdin, bounded output, no `.pyc`; a folder under home
+  is no longer mistaken for a project because of `~/.guild`; broken config/plan/role files give
+  one line (CLI exit 2, dashboard still loads); empty or malformed model streams fall back
+  to the next model. 366 tests.

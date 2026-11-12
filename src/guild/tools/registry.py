@@ -42,9 +42,10 @@ class Tool:
     spec: ToolSpec
     fn: ToolFn
     mutating: bool = False
-    # For a mutating tool: what the owner is shown before the call runs in pair mode. Takes the
-    # same arguments as the tool. Returns None when there is nothing to approve: the call will
-    # be refused or fail anyway (the tool then says why), or it changes nothing.
+    # What the owner is shown before the call runs in pair mode. Takes the same arguments as
+    # the tool. Returns None when there is nothing to approve: the call changes nothing, or
+    # the tool refuses it anyway (it then says why). Raises PermissionError for the latter too;
+    # any other error means the call cannot be shown, and then it does not run.
     preview: PreviewFn | None = None
 
 
@@ -66,6 +67,7 @@ def tool(
 
 
 MAX_PREVIEW = 20_000
+MAX_FETCH_BYTES = 2_000_000
 MAX_PROPOSED = 400_000
 
 
@@ -79,13 +81,26 @@ def _edit_preview(path: str, old: str, new: str, new_file: bool) -> dict[str, An
     )
     req: dict[str, Any] = {
         "kind": "edit",
-        "path": path,
+        "path": visible(path),
         "new_file": new_file,
-        "preview": _clip("\n".join(diff), MAX_PREVIEW),
+        "preview": visible(_clip("\n".join(diff), MAX_PREVIEW)),
     }
     if len(new) <= MAX_PROPOSED:
         req["proposed"] = new  # lets an IDE show a real side-by-side diff
     return req
+
+
+# Characters that change what a terminal, a browser or an editor shows without being seen:
+# control codes (ESC can erase and rewrite the line above), bidirectional overrides (the text
+# reads in another order than it runs) and zero-width characters.
+_INVISIBLE_RX = re.compile(
+    "[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]"
+)
+
+
+def visible(text: str) -> str:
+    """`text` for an approval prompt: what the owner reads is what will run or be written."""
+    return _INVISIBLE_RX.sub(lambda m: f"\\u{ord(m.group()):04x}", text)
 
 
 def _clip(s: str, n: int = MAX_OUTPUT) -> str:
@@ -180,16 +195,17 @@ def read_file(
 
 
 def _preview_write(ctx: ToolContext, path: str, content: str) -> dict[str, Any] | None:
-    if not isinstance(content, str):
-        return None
+    content = _as_text(content)
     ctx.check_write(path)
     p, key = ctx.resolve(path), _norm(path)
     if p.is_dir():
         return None
     existed = p.is_file()
-    old = _read_text_raw(p).replace("\r\n", "\n") if existed else ""
-    if old and key not in ctx.files_read and key not in ctx.files_written:
+    if existed and p.stat().st_size > 0 and key not in ctx.files_read | ctx.files_written:
         return None  # the read-before-overwrite guard refuses this one
+    # errors="replace": a file that is not UTF-8 is still shown (and asked about) before it
+    # is overwritten
+    old = p.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n") if existed else ""
     new = content.replace("\r\n", "\n")
     return None if existed and new == old else _edit_preview(key, old, new, not existed)
 
@@ -224,8 +240,7 @@ def write_file(ctx: ToolContext, path: str, content: str) -> str:
             f"updated content that keeps everything not covered by the task."
         )
     p.parent.mkdir(parents=True, exist_ok=True)
-    if not isinstance(content, str):
-        content = str(content)
+    content = _as_text(content)
     if existed and p.is_file() and p.stat().st_size > 0:
         try:
             _write_text_raw(p, content, _newline_style(_read_text_raw(p)))
@@ -235,6 +250,11 @@ def write_file(ctx: ToolContext, path: str, content: str) -> str:
         p.write_text(content, encoding="utf-8")
     ctx.files_written.add(key)
     return f"{'overwrote' if existed else 'created'} {path} ({len(content)} chars)"
+
+
+def _as_text(content: Any) -> str:
+    """File content as the tool will write it. Models sometimes send an object or a number."""
+    return content if isinstance(content, str) else str(content)
 
 
 def _norm(path: str) -> str:
@@ -352,9 +372,11 @@ def search(
 
 
 def _preview_command(ctx: ToolContext, command: str, timeout: int = 120) -> dict[str, Any] | None:
-    if not isinstance(command, str) or not command.strip() or readonly_allowed(command):
+    if not isinstance(command, str) or not command.strip():
+        return None  # the tool refuses these itself
+    if readonly_allowed(command, ctx.root):
         return None  # pytest, git status, ls …: nothing to approve
-    return {"kind": "command", "command": command, "preview": command}
+    return {"kind": "command", "command": visible(command), "preview": visible(command)}
 
 
 @tool(
@@ -372,20 +394,38 @@ def _preview_command(ctx: ToolContext, command: str, timeout: int = 120) -> dict
     preview=_preview_command,
 )
 def run_command(ctx: ToolContext, command: str, timeout: int = 120) -> str:
-    if ctx.readonly and not readonly_allowed(command):
+    if not isinstance(command, str) or not command.strip():
+        # a list would run without a shell and without having been shown for approval
+        raise TypeError("command must be a non-empty string")
+    if ctx.readonly and not readonly_allowed(command, ctx.root):
         raise PermissionError(f"this role is read-only; {READONLY_HINT}")
     res = ctx.sandbox.run(command, timeout=min(max(_int(timeout, 120) or 120, 1), 600))
     return _clip(f"exit={res.returncode}\n{res.output}")
+
+
+def _test_args(extra_args: Any) -> str:
+    return extra_args.strip() if isinstance(extra_args, str) else ""
+
+
+def _preview_tests(ctx: ToolContext, extra_args: str = "") -> dict[str, Any] | None:
+    """Running the configured tests needs no approval. Extra arguments are appended to a shell
+    command line, so anything beyond plain test-runner arguments is shown as a command."""
+    extra = _test_args(extra_args)
+    if not extra or readonly_test_args_allowed(extra, ctx.root):
+        return None
+    command = visible(f"{ctx.test_command} {extra}")
+    return {"kind": "command", "command": command, "preview": command}
 
 
 @tool(
     "run_tests",
     "Run the project's configured test command in the sandbox.",
     {"type": "object", "properties": {"extra_args": {"type": "string", "default": ""}}},
+    preview=_preview_tests,
 )
 def run_tests(ctx: ToolContext, extra_args: str = "") -> str:
-    extra_args = str(extra_args or "").strip()
-    if ctx.readonly and extra_args and not readonly_test_args_allowed(extra_args):
+    extra_args = _test_args(extra_args)
+    if ctx.readonly and extra_args and not readonly_test_args_allowed(extra_args, ctx.root):
         raise PermissionError("this role is read-only; those extra_args are not allowed")
     cmd = f"{ctx.test_command} {extra_args}".strip()
     res = ctx.sandbox.run(cmd, timeout=600)
@@ -442,26 +482,32 @@ def web_fetch(ctx: ToolContext, url: str) -> str:
 
     url = str(url).strip()
     try:
-        r = None
         for _ in range(6):  # follow redirects by hand so every hop is checked
             why = blocked_url(url)
             if why:
                 raise PermissionError(why)
-            r = httpx.get(
+            with httpx.stream(
+                "GET",
                 url,
                 timeout=30,
                 follow_redirects=False,
                 headers={"User-Agent": f"guild/{__version__}"},
-            )
-            if r.is_redirect and r.headers.get("location"):
-                url = str(r.url.join(r.headers["location"]))
-                continue
+            ) as r:
+                if r.is_redirect and r.headers.get("location"):
+                    url = str(r.url.join(r.headers["location"]))
+                    continue
+                body = b""
+                for chunk in r.iter_bytes():  # a documentation page, not a download
+                    body += chunk
+                    if len(body) >= MAX_FETCH_BYTES:
+                        break
             break
         else:
             return "fetch failed: too many redirects"
     except (httpx.HTTPError, ValueError) as e:
         return f"fetch failed: {e}"
-    text = re.sub(r"<script.*?</script>|<style.*?</style>", "", r.text, flags=re.S | re.I)
+    page = body[:MAX_FETCH_BYTES].decode(r.encoding or "utf-8", errors="replace")
+    text = re.sub(r"<script.*?</script>|<style.*?</style>", "", page, flags=re.S | re.I)
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n\s*\n+", "\n", text)
@@ -485,8 +531,8 @@ def approval_request(ctx: ToolContext, name: str, args: dict[str, Any]) -> dict[
         return None
     try:
         req = t.preview(ctx, **args)
-    except (PermissionError, OSError, UnicodeDecodeError, ValueError, TypeError):
-        return None  # the tool itself will refuse or report the problem
+    except PermissionError:
+        return None  # the tool refuses this call itself, with the same error
     return None if req is None else {"tool": name, **req}
 
 
@@ -518,8 +564,15 @@ def dispatch(ctx: ToolContext, name: str, args: dict[str, Any]) -> ToolResult:
     if MALFORMED_ARGS not in args:
         accepted = set(inspect.signature(t.fn).parameters) - {"ctx"}
         args = {k: v for k, v in args.items() if k in accepted}
-    if ctx.approver is not None and t.mutating and not ctx.readonly:
-        req = approval_request(ctx, name, args)
+    if ctx.approver is not None and t.preview is not None and not ctx.readonly:
+        try:
+            req = approval_request(ctx, name, args)
+        except Exception as e:
+            # fail closed: what cannot be shown to the owner does not run
+            return ToolResult(
+                f"could not prepare {name} for approval ({type(e).__name__}: {e}); not run",
+                ok=False,
+            )
         if req is not None:
             approved, why = ctx.approver(req)
             if not approved:

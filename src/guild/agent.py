@@ -166,7 +166,11 @@ class Agent:
         return self.router.cancel.is_set()
 
     def _run_tool(self, call: ToolCall) -> str:
-        result = self._dispatch(call.name, call.arguments)
+        if self.ctx.tool_calls_made >= self.max_tool_calls:
+            # checked per call: one reply may carry any number of calls
+            result = ToolResult("tool budget exhausted; not run", ok=False)
+        else:
+            result = self._dispatch(call.name, call.arguments)
         self.trace.tool_call(
             role=self.role.name,
             tool=call.name,

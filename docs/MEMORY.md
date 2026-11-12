@@ -4,10 +4,48 @@ Current state of the project. Update at the end of every working session.
 
 ## Current status (2026-10-02)
 
-v0.2.x. 229 tests with scripted fake models (193 at the time of this entry); `ruff check` + `ruff format --check` clean (rule set
+v0.2.x. 366 tests with scripted fake models (193 at the time of this entry); `ruff check` + `ruff format --check` clean (rule set
 pinned). TASK-001 has one accepted free-profile real-model run; TASK-002 guards are in. A full
 code audit on 2026-10-02 fixed 14 defects (see CHANGELOG "Unreleased") — none of it is confirmed
 on a real model run yet; that re-run is the next step.
+
+## Break-it audit 2, 2026-11-12 (after the untangle refactor)
+
+Attacked: command policy, tools and approval gate, sandbox, git, stored files, dashboard API
+and page, providers, verification. All found with running code; each has a test in
+`tests/test_hardening3.py`. What was wrong:
+
+- **Inspection allowlist** (read-only roles; runs without approval in pair mode) was bypassed
+  by quoting (`"--output=x"`), variables, short options (`sort -o`, `ruff check -o`), and
+  options that write, execute or upload (`pytest --log-file`, `pylint --init-hook`,
+  `mypy --install-types`, `npm audit fix`, `pytest --pastebin`). `cat .env` and
+  `cat /etc/passwd` were allowed. Rewritten in `tools/policy.py`: shell-aware splitting,
+  unsafe-option table, path arguments checked against the project and the credential rule.
+- **Approval gate**: `run_command` with a list, `run_tests` with `; cmd` in `extra_args`,
+  `write_file` with non-text content and overwriting a non-UTF-8 file all ran without being
+  shown. Now: previews fail closed; ESC and bidi characters are made visible.
+- **Budget**: one model reply with 200 tool calls ran all 200. Checked per call now.
+- **Spending cap**: a hosted model missing from the price table counted as $0 under any cap.
+- **Sandbox**: commands inherited the terminal's stdin, output was unbounded in memory
+  (876 MB for a 300 MB flood), a background child held the pipe until the timeout, stale
+  `.pyc` could make a test run the previous version of a file.
+- **Verification**: skipping/xfailing every test, or forcing exit code 0 in a conftest hook,
+  passed broken code.
+- **Project root**: after the dashboard had written `~/.guild/recent.json`, any folder under
+  home without `.git` resolved to the *home directory* as the project.
+- **Dashboard**: XSS through a role file name and through numbers in a trace file; a broken
+  `config.yaml` made every page load a 500; another localhost port counted as same-origin;
+  cancel during job start-up hit the previous job; an HTML error page from a gateway in
+  stream mode was an "empty reply" instead of a failed call.
+- **No lock**: two guild processes (terminal dashboard + the extension's) could run jobs on
+  one folder at once. `ProjectLock` (ADR-018).
+- Also: Windows aliases of `.git`/`.env` (`.GIT`, `.git.`, `GIT~1`, `.env::$DATA`), UNC paths,
+  a new `.env` committed/reviewed, plan.json values of the wrong type, dependency circles.
+
+Not fixed, known: a regex from a model can backtrack for a long time in `search` (Python has
+no regex timeout); a hostile repository that ships its own `.guild/config.yaml` controls the
+test command (same trust as `.vscode/tasks.json` — the extension is disabled in untrusted
+workspaces); `web_fetch` resolves a host twice (DNS rebinding window).
 
 ## Untangle refactor 2026-11-12
 

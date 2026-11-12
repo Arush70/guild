@@ -39,6 +39,14 @@ class Usage:
     input_tokens: int = 0
     output_tokens: int = 0
 
+    def __post_init__(self) -> None:
+        # counts come from the provider's reply; costs and the spending cap are computed from
+        # them, so anything that is not a count (text, null, a negative number) is 0
+        for name in ("input_tokens", "output_tokens"):
+            v = getattr(self, name)
+            ok = isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
+            setattr(self, name, int(v) if ok else 0)
+
     def __add__(self, other: Usage) -> Usage:
         return Usage(
             self.input_tokens + other.input_tokens, self.output_tokens + other.output_tokens

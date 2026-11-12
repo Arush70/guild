@@ -27,6 +27,10 @@ the project, run destructive commands, or slip bad code into `main`.
   tree directly (no branch). Every file change and every command outside the inspection
   allowlist is shown to the owner first and only happens on approval; "approve all edits" lasts
   for one turn (dashboard / VS Code) or one session (CLI) and never covers commands.
+- What cannot be shown is not run: a call whose preview fails is refused. Extra arguments
+  for `run_tests` beyond plain test-runner arguments are shown as a command. Control
+  characters and text-direction overrides in a command or diff are displayed as `\u001b`
+  escapes, so the text approved is the text that runs.
 - The approval is an additional gate. Everything in "Filesystem" above still applies, and with
   no approver attached the gate declines.
 - `plan` mode is read-only.
@@ -34,7 +38,13 @@ the project, run destructive commands, or slip bad code into `main`.
 ## Secrets
 
 - Subprocesses (tests, commands) run with `*KEY*`, `*TOKEN*`, `*SECRET*`, `*PASSWORD*`,
-  `*CREDENTIAL*` env vars removed, so a model can't `env` its way to your API keys.
+  `*CREDENTIAL*`, `*AUTH*`, `*COOKIE*`, `*_PAT`, `*_DSN` env vars removed, and any variable
+  whose value is a URL with a password in it, so a model can't `env` its way to your keys.
+  (Proxy variables and `XAUTHORITY` are kept: commands need them.)
+- Credential files — `.env*` (not `.env.example`), private keys (`id_rsa`, `*.pem`, `*.key`),
+  `.netrc`, `.npmrc`, `.pypirc`, `credentials.json`, `secrets.*` — are not read by the file
+  tools, under any name Windows opens them by (`.ENV`, `.env.`, `.env::$DATA`). One created
+  during a task is left out of the review diff and of guild's commit.
 - API keys are read from the environment only; never written to config, plan or trace.
 - `.env` is git-ignored; `.env.example` documents names only.
 - Traces may contain code excerpts and tool output; `.guild/runs/` is git-ignored by
@@ -46,12 +56,15 @@ the project, run destructive commands, or slip bad code into `main`.
 - It never merges, pushes, rebases, resets or deletes branches on its own; the dashboard
   merge/discard are explicit human actions and refuse on a dirty tree or conflicts.
 - `.guild/` is excluded from guild's commits and from review diffs.
+- One guild process at a time may plan, run tasks or pair in a project (an OS lock on
+  `.guild/lock`); a second one stops with "… is already working on this project".
 
 ## Network
 
 - The dashboard binds to 127.0.0.1 only; there is no auth because there is no remote access.
-  It also refuses requests whose `Host` is not localhost and state-changing requests with a
-  foreign `Origin` (a web page cannot drive it through DNS rebinding or a cross-site POST).
+  It also refuses requests whose `Host` is not localhost and state-changing requests whose
+  `Origin` is not the dashboard's own, port included (a web page cannot drive it through
+  DNS rebinding or a cross-site POST, and neither can another program's page on localhost).
   Extra host names can be allowed with `GUILD_UI_HOSTS=name1,name2`.
   Do not expose it with a reverse proxy without adding auth.
 - Model providers are contacted over HTTPS via the official SDKs; Ollama is local HTTP.
@@ -67,9 +80,29 @@ the project, run destructive commands, or slip bad code into `main`.
   and refuses priced models even if a key is present — before the request is sent.
   `.guild/prices.yaml` (`provider/model: [input, output]` per 1M tokens, or `0`) overrides the
   built-in list prices, e.g. to mark a free-tier model as free.
+- A cap can only be kept for models with a known price. Under any cap, a hosted model that is
+  not in the price table is refused before the request (it used to count as $0 and so
+  could spend without limit). Add it to `.guild/prices.yaml`. Models served from this machine
+  (Ollama, a local gateway) are exempt.
+- Token counts from a provider that are not counts (text, null, negative) are taken as 0.
 - Prices are estimates from list prices; the provider dashboard is the truth.
 
+## Inspection commands (read-only roles; pair mode runs these without asking)
+
+- The command line is split the way a shell splits it; options are checked after quotes and
+  escapes are removed, so `"--output=x"` or `-del""ete` hide nothing. Variable expansion
+  (`$X`, `${X}`, cmd.exe `%X%`), backticks, `^` and line breaks are refused.
+- Refused: options that write a file, load a plugin or config, run another program, install
+  packages or upload output (`-o`, `--log-file`, `--init-hook`, `-exec`, `--pastebin`, …),
+  and `npm audit fix`.
+- Refused: arguments that name a credential file (also through a glob or `git show REV:path`),
+  an existing path outside the project, the home folder or a network share; recursive
+  `grep`/unfiltered `rg` over a folder that contains a credential file.
+- Still true: running the project's tests runs the project's code.
+
 ## Sandbox
+- Commands get no keyboard input, at most 1 MB of output is kept from each end, and Python
+  writes no `.pyc` files (a stale one could make a test run the previous version of a file).
 
 - `sandbox: docker` runs test/commands in a throwaway container with the project
   bind-mounted (`.git` and `.guild` read-only), `--network none`, 2 GB / 2 CPU limits. Use it

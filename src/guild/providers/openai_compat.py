@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from typing import Any
 
 from .base import (
     Completion,
@@ -194,7 +195,7 @@ class OpenAICompatProvider:
             else Usage()
         )
         return Completion(
-            message=Message(role="assistant", content=msg.content or "", tool_calls=calls),
+            message=Message(role="assistant", content=_text(msg.content), tool_calls=calls),
             usage=usage,
             model=full,
             stop_reason=choice.finish_reason or "",
@@ -247,10 +248,11 @@ class OpenAICompatProvider:
                     slot["id"] = tc_id
                 fn = getattr(tc, "function", None)
                 if fn is not None:
-                    if getattr(fn, "name", None):
-                        slot["name"] = (slot["name"] or "") + fn.name
-                    if getattr(fn, "arguments", None):
-                        slot["args"] = (slot["args"] or "") + fn.arguments
+                    name, arguments = getattr(fn, "name", None), getattr(fn, "arguments", None)
+                    if isinstance(name, str):
+                        slot["name"] += name
+                    if isinstance(arguments, str):
+                        slot["args"] += arguments
         tool_calls = [
             ToolCall(
                 id=c["id"] or f"call_{i}", name=c["name"], arguments=parse_json_args(c["args"])
@@ -258,12 +260,28 @@ class OpenAICompatProvider:
             for i, c in sorted(calls.items(), key=lambda kv: kv[0])
             if c["name"]
         ]
+        if not (text_parts or tool_calls or finish):
+            # an HTML error page, an {"error": ...} object or an empty body where a stream
+            # should be: that is a failed call (try the next model), not an empty answer
+            raise ProviderError(full, "the server sent no reply (empty or malformed stream)")
         return Completion(
             message=Message(role="assistant", content="".join(text_parts), tool_calls=tool_calls),
             usage=usage,
             model=full,
             stop_reason=finish,
         )
+
+
+def _text(content: Any) -> str:
+    """Reply content as text. Some gateways send a list of parts ({"type": "text", ...})."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = (
+            p.get("text") if isinstance(p, dict) else getattr(p, "text", None) for p in content
+        )
+        return "".join(p for p in parts if isinstance(p, str))
+    return "" if content is None else str(content)
 
 
 def _adapt_kwargs(kwargs: dict, error: str) -> dict | None:

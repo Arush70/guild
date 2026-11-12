@@ -42,6 +42,22 @@ untouched. Merge manually: `git merge guild/t1-...`, resolve, commit.
 **Windows: `Expand-Archive` / paths with spaces** — quote the path:
 `cd "C:\Machine Learning projects\guild"`.
 
+**"has no known price, so the $N cap cannot be kept"** — the model is hosted and not in guild's
+price table, so its cost could not be counted against the profile's cap. Add a line to
+`.guild/prices.yaml`: `provider/model: [input, output]` (USD per 1M tokens), or `0` if it is
+free for you.
+
+**"guild process N is already working on this project"** — another guild (a terminal, the
+dashboard, or the VS Code extension's own server) is planning, running or pairing in the same
+folder. Wait for it or stop it; the lock disappears with that process.
+
+**"NO TEST RAN (N skipped, xfailed or deselected)"** — the project had tests before the task
+and none of them executed afterwards. If your whole suite is skipped on this machine on
+purpose, point `test_command` at something that runs.
+
+**`.guild/config.yaml: …` and nothing else** — that file (or a role/profile override) cannot
+be read; the message names the line or field. Fix it or delete it and run `guild init`.
+
 **Costs** — `guild cost` sums *estimates* from list prices in `providers/router.py`. Your
 provider dashboard is the truth. Every profile has `max_usd_per_run`; the free profile is 0
 and refuses paid models even if a key is set.

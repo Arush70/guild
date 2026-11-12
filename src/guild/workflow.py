@@ -17,7 +17,7 @@ import threading
 import traceback
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields
-from functools import partial
+from functools import partial, wraps
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +25,7 @@ from . import projectdocs
 from .agent import Agent, AgentResult
 from .config import Profile, ProjectConfig, Role, load_role
 from .errors import Cancelled
-from .paths import ProjectPaths
+from .paths import ProjectLock, ProjectPaths
 from .plan import Plan, PlanStore, Task
 from .providers import CostTracker, Message, Router
 from .providers.router import load_prices
@@ -106,6 +106,18 @@ class TaskOutcome:
 Reporter = Callable[[str, str], None]  # (level, message)
 
 
+def _exclusive(method):
+    """The method changes the project (branches, files, plan.json): only one guild process may
+    be inside one at a time. See ProjectLock."""
+
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self.lock:
+            return method(self, *args, **kwargs)
+
+    return locked
+
+
 class Guild:
     def __init__(
         self,
@@ -127,6 +139,7 @@ class Guild:
         self.dry_run = dry_run
         self.on_token = on_token
         self.paths = ProjectPaths(root)
+        self.lock = ProjectLock(self.paths.lock)
         self.plans = PlanStore(self.paths.plan)
         self.repo = Repo(root)
         self.run_id = new_run_id()
@@ -233,6 +246,7 @@ class Guild:
             raise RuntimeError(f"Lead did not return a plan. Raw reply:\n{res.raw[:2000]}")
         return res.data
 
+    @_exclusive
     def plan(self, goal: str, extra_context: str = "") -> Plan:
         self._phase("plan", "lead", goal=goal)
         data = self._lead_plan(
@@ -247,6 +261,7 @@ class Guild:
         )
         return plan
 
+    @_exclusive
     def revise_plan(self, instruction: str) -> Plan:
         """Ask the Lead to rewrite the current plan according to a natural-language instruction."""
         current = self.plans.load()
@@ -269,6 +284,7 @@ class Guild:
         return plan
 
     # ------------------------------------------------------------------ run one task
+    @_exclusive
     def run_task(self, plan: Plan, task: Task, *, roles: list[str] | None = None) -> TaskOutcome:
         branch: TaskBranch | None = None
         try:
@@ -577,6 +593,7 @@ class Guild:
         return review
 
     # ------------------------------------------------------------------ run several
+    @_exclusive
     def run_tasks(
         self,
         plan: Plan,
@@ -656,6 +673,7 @@ class Guild:
             question, context_blocks=blocks, prior=self._prior(history, 12), expect_json=False
         )
 
+    @_exclusive
     def pair(
         self,
         message: str,

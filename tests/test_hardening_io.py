@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from types import SimpleNamespace as NS
 
 import pytest
@@ -181,19 +182,17 @@ def test_docker_sandbox_mounts_git_and_guild_read_only(project, monkeypatch):
     (project / ".guild").mkdir(exist_ok=True)
     seen: dict = {}
 
-    class FakeDocker:
-        returncode = 0
+    real_popen = sandbox.subprocess.Popen
 
-        def __init__(self, args, **kw):
-            seen["args"] = args
-
-        def communicate(self, timeout=None):
-            return "ok", None
+    def fake_docker(args, **kw):
+        # record the docker command line, run a stand-in that prints what a container would
+        seen["args"] = args
+        return real_popen([sys.executable, "-c", "print('ok')"], **kw)
 
     monkeypatch.setattr(sandbox.shutil, "which", lambda name: "/usr/bin/docker")
-    monkeypatch.setattr(sandbox.subprocess, "Popen", FakeDocker)
+    monkeypatch.setattr(sandbox.subprocess, "Popen", fake_docker)
     res = sandbox.DockerSandbox(project, "python:3.11-slim").run("pytest -q")
-    assert res.returncode == 0 and res.output == "ok"
+    assert res.returncode == 0 and res.output == "ok\n"
     assert seen["args"][seen["args"].index("--network") + 1] == "none"
     mounts = [seen["args"][i + 1] for i, a in enumerate(seen["args"]) if a == "-v"]
     assert any(m.endswith(":/work/.git:ro") for m in mounts), mounts

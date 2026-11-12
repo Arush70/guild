@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..paths import PROTECTED_DIRS
+from ..paths import PROTECTED_DIRS, windows_name
 
 
 @dataclass
@@ -21,6 +22,10 @@ class Workspace:
     ignore: list[str]
 
     def resolve(self, rel: str) -> Path:
+        if str(rel).startswith(("\\\\", "//")):
+            # a network path (\\server\share): even looking at it makes Windows log in to
+            # that server with the owner's account
+            raise PermissionError(f"path escapes project root: {rel}")
         p = (self.root / rel).resolve()
         if self.root.resolve() not in [p, *p.parents]:
             raise PermissionError(f"path escapes project root: {rel}")
@@ -82,6 +87,13 @@ class Workspace:
         return "\n".join(out) or "(empty)"
 
 
+def _is_protected(part: str) -> bool:
+    """.git and .guild under every name Windows accepts for them: other case, trailing dots or
+    spaces, an NTFS stream suffix, and the 8.3 short name (GIT~1, GUILD~1)."""
+    name = windows_name(part)
+    return name in PROTECTED_DIRS or bool(re.fullmatch(r"(git|guild)~\d+", name))
+
+
 @dataclass
 class ToolContext(Workspace):
     """A workspace plus one role's permissions and what it has done so far."""
@@ -102,7 +114,7 @@ class ToolContext(Workspace):
         if self.readonly:
             raise PermissionError("this role is read-only")
         parts = self.rel_parts(rel)
-        if any(part.lower() in PROTECTED_DIRS for part in parts):
+        if any(_is_protected(part) for part in parts):
             raise PermissionError(f"{rel} is inside a protected directory (.git / .guild)")
         if self.write_allowlist is not None:
             norm = "/".join(parts)

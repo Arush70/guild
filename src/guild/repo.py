@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .paths import CACHE_DIRS, GUILD_DIR, ProjectPaths
+from .paths import CACHE_DIRS, GUILD_DIR, ProjectPaths, is_secret_file
 
 BRANCH_PREFIX = "guild/"
 _NOT_GUILD = f":(exclude){GUILD_DIR}"
@@ -140,6 +140,8 @@ class Repo:
         for rel in sorted(self.untracked() - known_untracked):
             if rel.endswith(".pyc") or any(part in skip for part in Path(rel).parts):
                 continue
+            if is_secret_file(rel):
+                continue  # a new .env is not shown to the reviewing models
             try:
                 raw = (self.root / rel).read_bytes()[:_NEW_FILE_BYTES]
             except OSError:
@@ -157,7 +159,9 @@ class Repo:
         """Commit every change except guild's files, caches and `leave_untracked` (files that
         were already untracked before guild started and are not its to commit)."""
         self.run("add", "-A", "--", ".", _NOT_GUILD, *_NOT_CACHES)
-        for f in leave_untracked:
+        added = self.out("diff", "--cached", "--name-only", "--diff-filter=A", "-z").split("\0")
+        # a credentials file that appeared during the task (the owner's new .env) stays out
+        for f in {*leave_untracked, *(a for a in added if a and is_secret_file(a))}:
             self.run("reset", "-q", "--", f":(literal){f}")
         if self.run("diff", "--cached", "--quiet")[0] == 0:
             return CommitResult(False)  # nothing staged
@@ -273,6 +277,16 @@ class TaskBranch:
             return tb
         name = f"{BRANCH_PREFIX}{slug(task_id, 30) or 'task'}-{slug(title, 40)}".rstrip("-")
         tb.started_from = repo.current_branch()
+        if tb.started_from != name and repo.branch_exists(name):
+            # checkout -B moves the branch here; say where an earlier attempt can be found
+            lost = repo.out("rev-list", "--count", f"HEAD..refs/heads/{name}")
+            if lost.isdigit() and int(lost):
+                old = repo.out("rev-parse", "--short", f"refs/heads/{name}")
+                warn(
+                    f"branch {name} already had {lost} commit(s) from an earlier run that are "
+                    f"not on {tb.started_from or 'this commit'}; it now restarts from here. "
+                    f"To get the earlier work back: git branch {name}-earlier {old}"
+                )
         rc, out = repo.run("checkout", "-B", name)
         if rc != 0:
             raise RuntimeError(f"git checkout -B {name} failed: {out}")

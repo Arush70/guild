@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import shutil
 import time
@@ -18,6 +19,7 @@ from rich.table import Table
 from . import __version__, projectdocs
 from . import hardware as hwmod
 from .config import (
+    ConfigError,
     ProjectConfig,
     find_project_root,
     list_available,
@@ -27,7 +29,7 @@ from .config import (
     save_project_config,
 )
 from .errors import Cancelled
-from .paths import CACHE_DIRS, ProjectPaths
+from .paths import CACHE_DIRS, ProjectBusy, ProjectPaths
 from .plan import Plan, PlanError, PlanStore, Task
 from .providers import AllProvidersFailed, BudgetExceeded
 from .providers.status import ollama_models, profile_status
@@ -40,6 +42,21 @@ app = typer.Typer(
 )
 console = Console()
 err = Console(stderr=True)
+
+
+def command(fn):
+    """Register a CLI command. A config, profile, role or plan file that cannot be used ends
+    the command with one line naming the file, not a traceback."""
+
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except (ConfigError, PlanError, ProjectBusy) as e:
+            err.print(f"[red]{escape(str(e))}[/red]")
+            raise typer.Exit(2) from None
+
+    return app.command()(run)
 
 
 def _report(level: str, msg: str) -> None:
@@ -205,7 +222,7 @@ def _init_summary(hw: hwmod.Hardware, profile: dict, config_path: Path, profile_
     return "\n".join(lines)
 
 
-@app.command()
+@command
 def init(
     path: Path = typer.Argument(Path("."), help="project directory"),
     profile: str | None = typer.Option(
@@ -310,7 +327,7 @@ def _ensure_gitignore(root: Path) -> None:
             )
 
 
-@app.command()
+@command
 def doctor(
     project: Path | None = typer.Option(None, "--project", "-C"),
     profile: str | None = typer.Option(None, "--profile", "-p"),
@@ -357,7 +374,7 @@ def doctor(
     console.print(f"test command: {cfg.test_command}")
 
 
-@app.command()
+@command
 def plan(
     goal: str = typer.Argument(..., help="what you want built"),
     project: Path | None = typer.Option(None, "--project", "-C"),
@@ -429,7 +446,7 @@ def _show_plan(p: Plan) -> None:
         )
 
 
-@app.command()
+@command
 def status(project: Path | None = typer.Option(None, "--project", "-C")):
     """Show the current plan and task statuses."""
     root, _cfg, _prof = _load(project, None)
@@ -440,7 +457,7 @@ def status(project: Path | None = typer.Option(None, "--project", "-C")):
     _show_plan(plan_)
 
 
-@app.command()
+@command
 def run(
     task_ids: list[str] | None = typer.Argument(
         None, help="task id(s), e.g. T1 T3 (default: next runnable)"
@@ -534,7 +551,7 @@ def _show_outcome(out: TaskOutcome) -> None:
     console.print(Panel("\n".join(lines), title=escape(f"{out.task.id} {out.task.title}")))
 
 
-@app.command()
+@command
 def ask(
     role: str = typer.Argument(..., help="lead | critic | security | researcher | ..."),
     question: str = typer.Argument(...),
@@ -568,7 +585,7 @@ _PAIR_HELP = (
 )
 
 
-@app.command()
+@command
 def pair(
     message: str | None = typer.Argument(None, help="first request (omit to just start chatting)"),
     project: Path | None = typer.Option(None, "--project", "-C"),
@@ -675,7 +692,7 @@ def pair(
     console.print(f"\ntrace: {g.trace.path}")
 
 
-@app.command()
+@command
 def review(
     project: Path | None = typer.Option(None, "--project", "-C"),
     profile: str | None = typer.Option(None, "--profile", "-p"),
@@ -712,7 +729,7 @@ def review(
     console.print(_cost_table(g.tracker))
 
 
-@app.command()
+@command
 def cost(
     project: Path | None = typer.Option(None, "--project", "-C"),
     last: int = typer.Option(10, help="how many runs to summarise"),
@@ -745,7 +762,7 @@ def cost(
     console.print(f"estimated total: ${grand:.4f}  (≈ £{grand * 0.78:.2f})")
 
 
-@app.command()
+@command
 def roles(project: Path | None = typer.Option(None, "--project", "-C")):
     """List available roles and profiles."""
     root = find_project_root(project)
@@ -755,7 +772,11 @@ def roles(project: Path | None = typer.Option(None, "--project", "-C")):
     t.add_column("tools")
     t.add_column("description")
     for n in list_available("roles", root):
-        r = load_role(n, root)
+        try:
+            r = load_role(n, root)
+        except ConfigError as e:
+            t.add_row(escape(n), "", "", f"[red]{escape(str(e))}[/red]")
+            continue
         t.add_row(
             r.name,
             r.slot + (f" → {r.escalation_slot}" if r.escalation_slot else ""),
@@ -768,7 +789,11 @@ def roles(project: Path | None = typer.Option(None, "--project", "-C")):
     t2.add_column("budget £/mo")
     t2.add_column("description")
     for n in list_available("profiles", root):
-        p = load_profile(n, root)
+        try:
+            p = load_profile(n, root)
+        except ConfigError as e:
+            t2.add_row(escape(n), "", f"[red]{escape(str(e))}[/red]")
+            continue
         t2.add_row(
             p.name,
             "—" if p.monthly_budget_gbp is None else str(p.monthly_budget_gbp),
@@ -777,7 +802,7 @@ def roles(project: Path | None = typer.Option(None, "--project", "-C")):
     console.print(t2)
 
 
-@app.command()
+@command
 def watch(
     project: Path | None = typer.Option(None, "--project", "-C"),
     profile: str | None = typer.Option(None, "--profile", "-p"),
@@ -827,7 +852,7 @@ def watch(
         console.print("stopped")
 
 
-@app.command()
+@command
 def ui(
     project: Path | None = typer.Option(None, "--project", "-C"),
     port: int = typer.Option(7331, help="local port"),

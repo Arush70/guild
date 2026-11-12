@@ -3,21 +3,19 @@ a rule can be reviewed (and tested) on its own."""
 
 from __future__ import annotations
 
+import fnmatch
+import os
 import re
+import shlex
 from pathlib import Path
 
+from ..paths import CACHE_DIRS, PROTECTED_DIRS, is_secret_file
 
-def is_secret_file(name: str) -> bool:
-    """dotenv files hold the API keys the sandbox strips from the environment; reading one
-    would send them to the model provider and into the trace."""
-    n = Path(name).name.lower()
-    if n == ".env":
-        return True
-    return n.startswith(".env.") and not n.endswith((".example", ".sample", ".template", ".dist"))
+SKIP_WHEN_SCANNING = frozenset({*PROTECTED_DIRS, *CACHE_DIRS, "node_modules", ".venv", "venv"})
 
-
-# Read-only roles may only run inspection commands. An allowlist of command prefixes is used
-# instead of a deny-list: "echo x > f", "python -c ...", "sed -i", "del" etc. are all refused.
+# Read-only roles may only run inspection commands, and in pair mode these are the commands
+# that run without asking the owner. An allowlist of command prefixes is used instead of a
+# deny-list: "echo x > f", "python -c ...", "sed -i", "del" etc. are all refused.
 _READONLY_PREFIXES = (
     "pytest",
     "python -m pytest",
@@ -66,37 +64,239 @@ _READONLY_PREFIXES = (
     "sort",
     "uniq",
 )
-# Anything that chains, redirects, substitutes or backgrounds a command. A single "&" and a
-# newline are separators too (in sh and in cmd.exe), not only "&&" and ";".
-_SHELL_META_RX = re.compile(r"(&|;|>|<|`|\$\(|[\r\n]|\bsudo\b|\bxargs\b)")
+# Never allowed, quoted or not: command substitution, variable expansion (a variable can hold
+# an option the checks below would refuse), cmd.exe's escape character and line breaks.
+_EXPANSION_RX = re.compile(r"`|\$[({\w@*#?!-]|\^|[\r\n\x00]")
+_CMD_VARIABLE_RX = re.compile(r"%([^%\s]+)%")
 
-# Options that make an otherwise read-only command write files or run another program.
-_UNSAFE_ANYWHERE_RX = re.compile(
-    r"(?:^|\s)(?:--fix\S*|--delete|--add-noqa|--output(?:-file)?(?:=\S*)?|--ext-diff|"
-    r"--basetemp(?:=\S*)?|--junit-?xml(?:=\S*)?|--pre(?:=\S*)?|--open-files-in-pager\S*)"
-    r"(?=\s|$)"
+
+def _expands_in_cmd(cmd: str) -> bool:
+    """cmd.exe replaces %NAME% (and %NAME:~0,1% substrings, enough to spell any option) inside
+    quotes too. "%h%n%s" in a git format is left alone: no such variables exist."""
+    names = {k.upper() for k in os.environ}
+    return any(":" in m or m.upper() in names for m in _CMD_VARIABLE_RX.findall(cmd))
+
+
+# Separators and redirections. Refused outside double quotes; inside them they are text for
+# both sh and cmd.exe (single quotes do not quote in cmd.exe, so they do not count).
+_SHELL_META = frozenset("&;<>")
+
+# Options that make an otherwise read-only command write a file, run another program, install
+# something or send data away. Matched against each word after unquoting, up to "=".
+_UNSAFE_OPTIONS = frozenset(
+    {
+        "--fix",
+        "--fix-only",
+        "--unsafe-fixes",
+        "--delete",
+        "--add-noqa",
+        "--output",
+        "--output-file",
+        "--output-format-file",
+        "--ext-diff",
+        "--textconv",
+        "--no-index",
+        "--basetemp",
+        "--junitxml",
+        "--junit-xml",
+        "--pre",
+        "--open-files-in-pager",
+        "--log-file",
+        "--log",
+        "--debug",
+        "--pastebin",
+        "--override-ini",
+        "--rootdir",
+        "--confcutdir",
+        "--cache-dir",
+        "--report-log",
+        "--html",
+        "--init-hook",
+        "--load-plugins",
+        "--install-types",
+        "--createstub",
+        "--compress-program",
+        "--hostname-bin",
+        "--generatetrace",
+        "--watch",
+        "--config",
+        "--config-file",
+        "--rcfile",
+        "--shadow-file",
+        "--python-executable",
+        "--files0-from",
+        "--write-changes",
+        "--tee",
+        "-exec",
+        "-vettool",
+        "-toolexec",
+        "-coverprofile",
+        "-cpuprofile",
+        "-memprofile",
+        "-blockprofile",
+        "-mutexprofile",
+        "-trace",
+        "-outputdir",
+        "-delete",
+        "-execdir",
+        "-ok",
+        "-okdir",
+        "-fprint",
+        "-fprint0",
+        "-fprintf",
+        "-fls",
+    }
 )
-_FIND_UNSAFE = frozenset(
-    {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"}
-)
+_UNSAFE_OPTION_RX = re.compile(r"--\w[\w-]*-report$|--cov-report$")  # mypy / pytest-cov reports
+# Commands where a short "-o" (alone, with a value, or inside a cluster like "-ro") names an
+# output file or overrides configuration. For grep, rg and ls it is a harmless display flag.
+_DASH_O_WRITES = frozenset({"sort", "tree", "ruff", "bandit", "pip-audit", "go", "pytest", "pip"})
 _GIT_BRANCH_SAFE_RX = re.compile(
     r"-a|-r|-v|-vv|--all|--remotes|--verbose|--list|--show-current|--no-color|--color"
     r"|--merged|--no-merged|--contains|--no-contains"
 )
 
 
-def _segment_allowed(seg: str) -> bool:
-    if not any(seg == p or seg.startswith(p + " ") for p in _READONLY_PREFIXES):
+def _segments(cmd: str) -> list[str] | None:
+    """Split a command line at unquoted "|". None when it chains, redirects or backgrounds
+    anything outside double quotes, or a quote is left open."""
+    out, cur, quote = [], [], ""
+    for ch in cmd:
+        if quote:
+            if ch == quote:
+                quote = ""
+            elif ch in _SHELL_META and quote == "'":
+                return None
+        elif ch in "\"'":
+            quote = ch
+        elif ch in _SHELL_META:
+            return None
+        elif ch == "|":
+            out.append("".join(cur))
+            cur = []
+            continue
+        cur.append(ch)
+    if quote:
+        return None
+    out.append("".join(cur))
+    return out
+
+
+def _words(segment: str) -> list[str] | None:
+    """The arguments the program will receive: quotes and backslash escapes removed, as a POSIX
+    shell does. Options are checked on these, so `"--output=x"` and `-del""ete` hide nothing."""
+    try:
+        return shlex.split(segment, posix=True)
+    except ValueError:
+        return None
+
+
+def _unsafe_option(word: str, program: str) -> bool:
+    low = word.lower()
+    name = low.split("=", 1)[0]
+    if name in _UNSAFE_OPTIONS or _UNSAFE_OPTION_RX.search(name):
+        return True
+    if any(name.startswith(opt) for opt in ("--fix", "--open-files-in-pager", "--pre-")):
+        return True
+    if program in _DASH_O_WRITES and re.fullmatch(r"-[a-zA-Z]*o.*", word):
+        return True
+    if program == "pytest" and re.match(r"-[pc]", word):
+        return True  # load a plugin / another config file
+    return program == "git" and word.startswith("-O")  # git grep -O<pager>
+
+
+_GLOB_CHARS = frozenset("*?[")
+
+
+def _reads_outside(word: str, root: Path | None) -> bool:
+    """True when an argument names a secret file, or an existing path outside the project.
+    Checked on what exists, so a search pattern like "/api/state" is not mistaken for a path."""
+    value = word.split("=", 1)[1] if word.startswith("-") and "=" in word else word
+    if not value or value.startswith("-"):
         return False
-    words = seg.split()
-    if words[0] == "find" and any(w in _FIND_UNSAFE for w in words):
+    if value.startswith(("~", "\\\\", "//")):
+        return True  # the home folder, or a network share
+    path = value.replace("\\", "/").rstrip("/")
+    # "HEAD:.env" (git show) names a file after the colon
+    names = {path.rsplit("/", 1)[-1], path.rsplit(":", 1)[-1].rsplit("/", 1)[-1]}
+    if any(is_secret_file(n) for n in names):
+        return True
+    try:
+        base = (root or Path.cwd()).resolve()
+        if _GLOB_CHARS & set(path):
+            # the shell expands the pattern; see what it can expand to
+            folder, _, pattern = path.rpartition("/")
+            target = (base / folder).resolve()
+            hits = [n for n in os.listdir(target) if fnmatch.fnmatch(n, pattern)]
+            return any(is_secret_file(n) for n in hits) or base not in (target, *target.parents)
+        target = (base / value).resolve()
+        return base not in (target, *target.parents) and target.exists()
+    except FileNotFoundError:
         return False
-    if words[0] in {"sort", "tree"} and any(w == "-o" or w.startswith("-o") for w in words[1:]):
+    except (OSError, ValueError):
+        return True
+
+
+# Searching every file of a folder also searches its credential files. The `search` tool
+# skips them; these command forms do not.
+_GREP_RECURSIVE_RX = re.compile(
+    r"-[a-zA-Z]*[rR][a-zA-Z]*|--(dereference-)?recursive|--directories=recurse"
+)
+_RG_UNFILTERED = frozenset({"--hidden", "--no-ignore", "--unrestricted", "-."})
+
+
+def _searches_secrets(words: list[str], root: Path | None) -> bool:
+    if words[0] == "grep":
+        everything = any(_GREP_RECURSIVE_RX.fullmatch(w) for w in words[1:])
+    elif words[0] == "rg":
+        everything = any(
+            w in _RG_UNFILTERED or re.fullmatch(r"-[a-zA-Z]*u.*", w) for w in words[1:]
+        )
+    else:
         return False
-    if words[0] == "uniq" and len([w for w in words[1:] if not w.startswith("-")]) > 1:
+    if not everything:
+        return False
+    base = root or Path.cwd()
+    # the folders named on the command line, or the whole project when none is
+    folders = [base / w for w in words[1:] if not w.startswith("-") and (base / w).is_dir()]
+    return any(_has_secret_file(f) for f in folders or [base])
+
+
+def _has_secret_file(root: Path, limit: int = 20_000) -> bool:
+    seen = 0
+    for _, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_WHEN_SCANNING]
+        if any(is_secret_file(f) for f in filenames):
+            return True
+        seen += len(filenames)
+        if seen > limit:
+            return True  # too big to be sure: ask
+    return False
+
+
+def _segment_allowed(segment: str, root: Path | None) -> bool:
+    words = _words(segment)
+    # the same line as cmd.exe sees it: there, single quotes and backslashes are ordinary text
+    raw_words = segment.replace('"', "").split()
+    if not words or not raw_words:
+        return False
+    normal = " ".join(words)
+    if not any(normal == p or normal.startswith(p + " ") for p in _READONLY_PREFIXES):
+        return False
+    if words[0] != raw_words[0]:
+        return False  # the program name itself was quoted or escaped
+    program = "pytest" if "pytest" in words[:3] else words[0]
+    for word in {*words[1:], *raw_words[1:]}:
+        if _unsafe_option(word, program) or _reads_outside(word, root):
+            return False
+    if _searches_secrets(words, root):
+        return False
+    if words[:2] == ["npm", "audit"] and len(words) > 2 and not words[2].startswith("-"):
+        return False  # "npm audit fix"
+    if program == "uniq" and len([w for w in words[1:] if not w.startswith("-")]) > 1:
         return False  # "uniq IN OUT" writes OUT
-    if "pytest" in words[:3] and any(w == "-p" or w == "-c" or w == "-o" for w in words):
-        return False  # load a plugin / another config
+    if program == "tree" and "-R" in words:
+        return False  # with -H, writes an index file into every directory
     if words[:2] == ["git", "branch"]:
         # listing only: any positional argument or -d/-D/-m/-c/-f creates, moves or deletes
         rest = words[2:]
@@ -110,28 +310,35 @@ def _segment_allowed(seg: str) -> bool:
         ]
         if positional:
             return False
-    return not (words[:2] == ["git", "grep"] and any(w.startswith("-O") for w in words))
+    return True
 
 
 # Shown to a read-only role whose command was refused.
 READONLY_HINT = (
-    "only inspection commands are allowed (pytest, git log/show/diff/status, grep/rg, "
-    "ls/cat/head/tail, ruff check, mypy, pip list/show/audit, bandit)"
+    "only inspection commands on files of this project are allowed (pytest, git "
+    "log/show/diff/status, grep/rg, ls/cat/head/tail, ruff check, mypy, pip list/show/audit, "
+    "bandit), without options that write files or run other programs, and not on credential "
+    "files (.env); to search the whole project use the search tool"
 )
 
 
-def readonly_test_args_allowed(extra_args: str) -> bool:
-    """Extra arguments a read-only role adds to the project's test command. They are judged as
-    test-runner arguments: no chaining, no redirection, no plugin or config loading."""
-    return readonly_allowed(f"pytest {extra_args}")
+def readonly_test_args_allowed(extra_args: str, root: Path | None = None) -> bool:
+    """Extra arguments added to the project's test command. They are judged as test-runner
+    arguments: no chaining, no redirection, no plugin or config loading, no report files."""
+    return readonly_allowed(f"pytest {extra_args}", root) and "|" not in extra_args
 
 
-def readonly_allowed(cmd: str) -> bool:
-    c = cmd.strip()
-    if not c or _SHELL_META_RX.search(c) or _UNSAFE_ANYWHERE_RX.search(c):
+def readonly_allowed(cmd: str, root: Path | None = None) -> bool:
+    """True when `cmd` only inspects the project at `root`: a read-only role may run it, and
+    pair mode runs it without asking the owner."""
+    c = cmd.strip() if isinstance(cmd, str) else ""
+    if not c or _EXPANSION_RX.search(c) or _expands_in_cmd(c):
         return False
+    if re.search(r"\b(sudo|xargs)\b", c):
+        return False
+    segments = _segments(c)
     # plain pipelines like "pytest -q | tail -20" are fine
-    return all(_segment_allowed(seg.strip()) for seg in c.split("|"))
+    return bool(segments) and all(_segment_allowed(seg.strip(), root) for seg in segments)
 
 
 def blocked_url(url: str) -> str | None:
@@ -155,12 +362,7 @@ def blocked_url(url: str) -> str | None:
         return f"cannot resolve host {host}"
     for info in infos:
         ip = ipaddress.ip_address(info[4][0].split("%")[0])
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or (ip.is_multicast or ip.is_unspecified)
-        ):
+        mapped = getattr(ip, "ipv4_mapped", None)  # ::ffff:127.0.0.1 is 127.0.0.1
+        if not (mapped or ip).is_global or ip.is_multicast:
             return f"{host} is a local or private address"
     return None

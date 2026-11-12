@@ -65,12 +65,13 @@ src/guild/
 vscode-extension/     VS Code front end (ADR-014): extension.js + lib/{client,server,format}.js +
                       media/ (chat webview). No deps, no build. `npm test` (needs `guild` installed),
                       `npm run package` → .vsix. Talks only to the dashboard HTTP API.
-tests/                229 tests; FakeProvider in conftest.py scripts model replies, no API calls;
+tests/                366 tests; FakeProvider in conftest.py scripts model replies, no API calls;
                       test_robustness.py (schemas/repair/streaming), test_hardware.py (init wizard),
                       test_hardening*.py (2026-11-12 break-it audit: every test is an attack that worked),
                       test_pair.py (approval gate, modes, cancel, /api/pair, `guild pair`),
                       test_policy.py (command/URL policy), test_modules.py (plan, repo, verify, paths…),
-                      test_same_behaviour.py (differences the untangle review caught)
+                      test_same_behaviour.py (differences the untangle review caught),
+                      test_hardening3.py (second break-it audit: policy, approval gate, sandbox, …)
 ```
 
 ## Conventions

@@ -2,7 +2,7 @@
   "name": "guild-vscode",
   "displayName": "Guild",
   "description": "Run guild \u2014 a budget-aware multi-agent coding team \u2014 from the VS Code side bar: plan, run tasks, watch the team work, review and merge branches, and pair-program in a chat that asks before every change.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "arush70",
   "license": "MIT",
   "repository": {
@@ -24,6 +24,13 @@
     "multi-agent"
   ],
   "main": "./extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Guild starts the guild program found in the opened folder (its .venv) and runs that folder's configured test command."
+    },
+    "virtualWorkspaces": false
+  },
   "activationEvents": [
     "workspaceContains:.guild/config.yaml"
   ],

@@ -141,9 +141,14 @@ def read_trace(path: Path) -> list[dict[str, Any]]:
                 ev = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(ev, dict) and "kind" in ev:
+            if isinstance(ev, dict) and isinstance(ev.get("kind"), str):
                 events.append(ev)
     return events
+
+
+def _number(v: Any) -> float:
+    """A trace file can be damaged or edited; totals are built from numbers only."""
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
 
 
 def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -151,7 +156,7 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
     view all show."""
     by_role: dict[str, dict[str, Any]] = {}
     for e in events:
-        if e["kind"] != "model_call":
+        if e.get("kind") != "model_call":
             continue
         r = by_role.setdefault(
             e.get("role") or "?",
@@ -159,13 +164,13 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
         )
         r["calls"] += 1
         for key in ("input_tokens", "output_tokens", "usd", "latency_s"):
-            r[key] += e.get(key) or 0
+            r[key] += _number(e.get(key))
         r.setdefault("models", set()).add(str(e.get("model")))
     for r in by_role.values():
         r["models"] = sorted(r["models"])
         r["usd"] = round(r["usd"], 5)
         r["latency_s"] = round(r["latency_s"], 1)
-    start = next((e for e in events if e["kind"] == "run_start"), {})
+    start = next((e for e in events if e.get("kind") == "run_start"), {})
     return {
         "profile": start.get("profile"),
         "calls": sum(r["calls"] for r in by_role.values()),
@@ -173,7 +178,7 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
         "output_tokens": sum(r["output_tokens"] for r in by_role.values()),
         "usd": round(sum(r["usd"] for r in by_role.values()), 4),
         "by_role": by_role,
-        "phases": [e.get("phase") for e in events if e["kind"] == "phase"],
-        "started": events[0].get("ts", 0) if events else 0,
-        "ended": events[-1].get("ts", 0) if events else 0,
+        "phases": [str(e.get("phase")) for e in events if e.get("kind") == "phase"],
+        "started": _number(events[0].get("ts")) if events else 0,
+        "ended": _number(events[-1].get("ts")) if events else 0,
     }

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +81,37 @@ def _string_list(name: str, value: Any) -> list[str]:
     return value
 
 
+def _list(d: dict, key: str) -> list:
+    value = d.get(key) or []
+    if not isinstance(value, list):
+        raise ValueError(f"{key} must be a list")
+    return value
+
+
+def _task_from_dict(t: Any) -> Task:
+    if not isinstance(t, dict) or not isinstance(t.get("id"), str) or not t["id"].strip():
+        raise ValueError("every task is an object with a text 'id'")
+    tid = t["id"]
+    text = {k: t.get(k) or "" for k in ("title", "description", "done_when", "notes")}
+    refs = {k: t.get(k) for k in ("branch", "base")}
+    if not all(isinstance(v, str) for v in text.values()):
+        raise ValueError(f"task {tid}: title, description, done_when and notes must be text")
+    if not all(v is None or isinstance(v, str) for v in refs.values()):
+        raise ValueError(f"task {tid}: branch and base must be text")
+    status = t.get("status", "todo")
+    if status not in TASK_STATUSES:
+        raise ValueError(f"task {tid}: status must be one of {list(TASK_STATUSES)}")
+    return Task(
+        id=tid,
+        files=_string_list(f"task {tid}: files", t.get("files") or []),
+        depends_on=_string_list(f"task {tid}: depends_on", t.get("depends_on") or []),
+        status=status,
+        merged=t.get("merged") is True,
+        **text,
+        **refs,
+    )
+
+
 @dataclass
 class Plan:
     goal: str
@@ -96,14 +127,26 @@ class Plan:
 
     @classmethod
     def from_dict(cls, d: dict) -> Plan:
-        known = {f.name for f in fields(Task)}
+        """A plan as stored in plan.json. The file can be edited by hand, so every value is
+        checked: a wrong type raises here, not in the middle of a run."""
+        if not isinstance(d, dict) or not isinstance(d.get("goal"), str):
+            raise ValueError("a plan is an object with a text 'goal'")
+        tasks = [_task_from_dict(t) for t in _list(d, "tasks")]
+        seen: set[str] = set()
+        for t in tasks:
+            if t.id in seen:
+                raise ValueError(f"two tasks have the id {t.id!r}")
+            seen.add(t.id)
+        created = d.get("created")
         return cls(
             goal=d["goal"],
-            roadmap=d.get("roadmap", []),
-            tasks=[Task(**{k: v for k, v in t.items() if k in known}) for t in d.get("tasks", [])],
-            risks=d.get("risks", []),
-            questions_for_owner=d.get("questions_for_owner", []),
-            created=d.get("created", time.time()),
+            roadmap=_string_list("roadmap", d.get("roadmap") or []),
+            tasks=tasks,
+            risks=_string_list("risks", d.get("risks") or []),
+            questions_for_owner=_string_list(
+                "questions_for_owner", d.get("questions_for_owner") or []
+            ),
+            created=created if isinstance(created, (int, float)) else time.time(),
         )
 
     @classmethod
@@ -177,7 +220,26 @@ class Plan:
                 out.append(
                     f"{t.id}: description is very short; the engineer may not know what to build"
                 )
+        looping = sorted(t.id for t in self.tasks if self._waits_for_itself(t))
+        if looping:
+            out.append(
+                f"{', '.join(looping)}: these tasks depend on each other in a circle, so none "
+                "of them can ever start — edit their 'after' lists"
+            )
         return out
+
+    def _waits_for_itself(self, task: Task) -> bool:
+        by_id = {t.id: t for t in self.tasks}
+        seen: set[str] = set()
+        todo = [d for d in task.depends_on if d != task.id]
+        while todo:
+            tid = todo.pop()
+            if tid == task.id:
+                return True
+            if tid in by_id and tid not in seen:
+                seen.add(tid)
+                todo.extend(by_id[tid].depends_on)
+        return False
 
     # ------------------------------------------------------------------ changes by the owner
     def edit_task(self, task_id: str, changes: dict[str, Any]) -> Task:
@@ -223,8 +285,8 @@ class PlanStore:
             return None
         try:
             return Plan.from_dict(json.loads(self.path.read_text(encoding="utf-8")))
-        except (ValueError, KeyError, TypeError, AttributeError) as e:
-            raise PlanError(f"{self.path} is not a readable plan ({type(e).__name__}: {e})") from e
+        except (ValueError, KeyError, TypeError, AttributeError, PlanError) as e:
+            raise PlanError(f"{self.path} is not a readable plan ({e})") from e
 
     def save(self, plan: Plan) -> None:
         atomic_write_text(self.path, json.dumps(plan.to_dict(), indent=2))

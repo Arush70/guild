@@ -29,6 +29,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..config import (
+    ConfigError,
     ProjectConfig,
     list_available,
     load_profile,
@@ -160,7 +161,13 @@ class Hub:
                 job.status = "cancelled"
                 job.error = "cancelled"
                 self.publish({"kind": "job_cancelled", "job": kind})
-            except (AllProvidersFailed, BudgetExceeded, RuntimeError, FileNotFoundError) as e:
+            except (
+                AllProvidersFailed,
+                BudgetExceeded,
+                RuntimeError,
+                FileNotFoundError,
+                ConfigError,
+            ) as e:
                 job.status = "error"
                 job.error = str(e)
                 self.publish({"kind": "job_error", "job": kind, "error": str(e)})
@@ -248,6 +255,7 @@ class _State:
         self.plans = PlanStore(self.paths.plan)
         self.repo = Repo(self.root)
         self.active: Guild | None = None  # the Guild of the running job, for /api/cancel
+        self.cancel_requested = False  # a cancel that arrived before that Guild existed
         self.session = PairSession()  # the running pair turn's permissions
         self.approvals: dict[str, dict] = {}  # approval requests waiting for the owner
         self.chat_history = self._load_chat()
@@ -318,9 +326,24 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
             return JSONResponse({"detail": "guild ui only answers on localhost"}, 403)
         origin = request.headers.get("origin")
         changes_state = request.method not in ("GET", "HEAD", "OPTIONS")
-        if origin and changes_state and (urlsplit(origin).hostname or "").lower() not in hosts:
+        # same origin, port included: another program's page on localhost:3000 (a dev server
+        # showing code an agent wrote) is as foreign to the dashboard as any web site
+        same_origin = origin is not None and (
+            urlsplit(origin).netloc.lower() == request.headers.get("host", "").strip().lower()
+        )
+        if origin and changes_state and not same_origin:
             return JSONResponse({"detail": "cross-site request refused"}, 403)
         return await call_next(request)
+
+    @app.exception_handler(ConfigError)
+    async def _config_error(request: Request, e: ConfigError):
+        return JSONResponse({"detail": str(e)}, 400)
+
+    @app.exception_handler(OSError)
+    async def _os_error(request: Request, e: OSError):
+        # a path the OS refuses (too long, not a directory, no permission) is the caller's
+        # problem to read about, not a crash
+        return JSONResponse({"detail": f"{type(e).__name__}: {e}"}, 400)
 
     @app.exception_handler(UnknownTask)
     async def _unknown_task(request: Request, e: UnknownTask):
@@ -355,8 +378,12 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
             )
             S.active = g
             try:
+                if S.cancel_requested:  # the owner pressed stop while the job was starting
+                    g.cancel()
                 return work(g)
             finally:
+                S.active = None
+                S.cancel_requested = False
                 g.close()
 
         S.hub.start(kind, run, accepted)
@@ -403,9 +430,15 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
             warnings = plan.warnings() if plan else []
         except PlanError as e:
             plan, warnings = None, [str(e)]
+        try:
+            config, config_error = S.config(), None
+        except ConfigError as e:
+            # the page must still load to say what is wrong; jobs fail with the same message
+            config, config_error = ProjectConfig(), str(e)
         return {
             "root": str(S.root),
-            "config": S.config().model_dump(),
+            "config": config.model_dump(),
+            "config_error": config_error,
             "plan_warnings": warnings,
             "profiles": list_available("profiles", S.root),
             "roles": list_available("roles", S.root),
@@ -428,10 +461,7 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
     @app.post("/api/project")
     def project_switch(req: ProjectReq):
         _not_while_running()
-        p = Path(req.path).expanduser()
-        if not p.is_dir():
-            raise HTTPException(400, f"not a directory: {req.path}")
-        S.switch(p)
+        S.switch(_folder(req.path))
         _ensure_config(S.root)
         _remember_project(S.root)
         return project_info()
@@ -447,9 +477,7 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
                         entries.append({"name": f"{d}:\\", "path": f"{d}:\\"})
             entries.insert(0, {"name": "~ (home)", "path": str(Path.home())})
             return {"path": "", "parent": None, "dirs": entries}
-        p = Path(path).expanduser()
-        if not p.is_dir():
-            raise HTTPException(400, "not a directory")
+        p = _folder(path)
         dirs = []
         try:
             for child in sorted(p.iterdir(), key=lambda c: c.name.lower()):
@@ -498,9 +526,11 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
     @app.get("/api/file")
     def file_read(path: str):
         try:
-            p = S.workspace().resolve(path)
+            p = Workspace(S.root, []).resolve(path)
         except PermissionError as e:
             raise HTTPException(403, str(e)) from e
+        except ValueError as e:  # a NUL byte in the path
+            raise HTTPException(400, str(e)) from e
         if not p.is_file():
             raise HTTPException(404, "no such file")
         if p.stat().st_size > 2_000_000:
@@ -558,12 +588,13 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
 
     @app.post("/api/approve/{approval_id}")
     def approve(approval_id: str, req: ApproveReq):
-        entry = S.approvals.get(approval_id)
-        if entry is None or entry["decision"] is not None:
-            raise HTTPException(404, "no such pending approval (already answered or cancelled)")
+        with S.hub.lock:  # two windows answering at once: the first answer stands
+            entry = S.approvals.get(approval_id)
+            if entry is None or entry["decision"] is not None:
+                raise HTTPException(404, "no such pending approval (already answered or cancelled)")
+            entry["decision"] = (req.approve, req.reason.strip()[:300])
         if req.approve and req.remember and entry.get("kind") == "edit":
             S.session.all_edits = True
-        entry["decision"] = (req.approve, req.reason.strip()[:300])
         entry["event"].set()
         S.hub.publish({"kind": "approval_resolved", "id": approval_id, "approved": req.approve})
         return {"ok": True}
@@ -572,10 +603,13 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
     def cancel():
         """Stop the running job at its next safe point (model call, tool call, running command,
         pending approval). A cancelled task goes back to "todo"."""
-        g = S.active
-        if not S.hub.busy() or g is None:
+        if not S.hub.busy():
             return {"ok": False, "detail": "no job is running"}
-        g.cancel()
+        g = S.active
+        if g is None:
+            S.cancel_requested = True
+        else:
+            g.cancel()
         return {"ok": True, "job": S.hub.job.kind}
 
     # ---- plan revision ---------------------------------------------------------------------
@@ -599,7 +633,12 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
 
     @app.get("/api/roles")
     def roles():
-        return [load_role(n, S.root).model_dump() for n in list_available("roles", S.root)]
+        out = []
+        for name in list_available("roles", S.root):
+            # one unreadable role file must not hide the others; using that role reports it
+            with contextlib.suppress(ConfigError):
+                out.append(load_role(name, S.root).model_dump())
+        return out
 
     @app.post("/api/config")
     def set_config(req: ConfigReq):
@@ -742,8 +781,8 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
 def _recent_projects() -> list[str]:
     try:
         items = json.loads(ProjectPaths.recent_projects().read_text(encoding="utf-8"))
-        return [p for p in items if Path(p).is_dir()][:12]
-    except (OSError, ValueError):
+        return [p for p in items if isinstance(p, str) and Path(p).is_dir()][:12]
+    except (OSError, ValueError, TypeError):
         return []
 
 
@@ -754,6 +793,18 @@ def _remember_project(root: Path) -> None:
         ProjectPaths.recent_projects().write_text(json.dumps(items[:12]), encoding="utf-8")
     except OSError:
         pass
+
+
+def _folder(path: str) -> Path:
+    """A folder named by the browser, or a 400 that says why not."""
+    try:
+        p = Path(path).expanduser()
+        ok = p.is_dir()
+    except (OSError, ValueError, RuntimeError):  # too long, NUL byte, unknown ~user
+        ok = False
+    if not ok:
+        raise HTTPException(400, f"not a directory: {path[:200]}")
+    return p
 
 
 def _ensure_config(root: Path) -> None:

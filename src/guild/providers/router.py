@@ -171,6 +171,31 @@ class Router:
                 raise ValueError(f"unknown provider prefix '{prefix}'")
         return self._providers[prefix]
 
+    def _cap_refusal(self, full: str, prefix: str) -> str | None:
+        """Why this model may not be called under the profile's spending cap, or None.
+
+        A cap can only be kept for models whose price is known. A hosted model that is not in
+        the price table is not "free": its cost would be counted as $0 and never reach any
+        cap. Models served from this machine (Ollama, a local gateway) cost nothing here.
+        """
+        if self.max_usd is None:
+            return None
+        price = self.tracker.prices.get(full)
+        hosted = prefix not in self._overrides and not (
+            prefix in ENDPOINTS and ENDPOINTS[prefix].local
+        )
+        if price is None and hosted and (prefix == "anthropic" or prefix in ENDPOINTS):
+            return (
+                f"has no known price, so the ${self.max_usd:g} cap cannot be kept — add it to "
+                ".guild/prices.yaml (0 if it is free for you)"
+            )
+        if self.max_usd == 0 and price is not None and any(price):
+            return (
+                "has a list price but the profile cap is $0 "
+                "(free tier? set it to 0 in .guild/prices.yaml)"
+            )
+        return None
+
     def candidates(self, slot: str) -> list[str]:
         chain = list(self.profile.chain(slot))
         if slot in self._sticky and self._sticky[slot] in chain:
@@ -205,22 +230,12 @@ class Router:
                 )
                 self._dead.add(full)
                 continue
-            if (
-                self.max_usd is not None
-                and self.max_usd == 0
-                and any(self.tracker.prices.get(full, (0.0, 0.0)))
-            ):
-                # free profile: decide before the request. Afterwards is too late: the call
-                # has been made and billed.
+            refusal = self._cap_refusal(full, prefix)
+            if refusal:
+                # decided before the request. Afterwards is too late: the call has been made
+                # and billed.
                 self._dead.add(full)
-                errors.append(
-                    ProviderError(
-                        full,
-                        "has a list price but the profile cap is $0 "
-                        "(free tier? set it to 0 in .guild/prices.yaml)",
-                        retryable=False,
-                    )
-                )
+                errors.append(ProviderError(full, refusal, retryable=False))
                 continue
             try:
                 provider = self._provider_for(prefix)
@@ -238,7 +253,11 @@ class Router:
                 errors.append(e)
                 self._dead.add(full)
                 continue
-            except ProviderError as e:
+            except Exception as e:
+                if not isinstance(e, ProviderError):
+                    # a reply shape the adapter did not expect: this model failed this call;
+                    # the next candidate may still answer
+                    e = ProviderError(full, f"unexpected {type(e).__name__}: {e}")
                 errors.append(e)
                 if not e.retryable:
                     self._dead.add(full)
