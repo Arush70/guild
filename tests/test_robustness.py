@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from guild.providers.base import Completion, Message, Usage
-from guild.schemas import validate
-from guild.trace import read_trace
-from guild.workflow import Guild
+from codeguild.providers.base import Completion, Message, Usage
+from codeguild.schemas import validate
+from codeguild.trace import read_trace
+from codeguild.workflow import Guild
 
 
 def test_validate_normalises_near_misses():
@@ -110,7 +110,7 @@ def test_openai_stream_assembly():
     """Assemble text + split tool-call deltas from a fake streamed response."""
     from types import SimpleNamespace as NS
 
-    from guild.providers.openai_compat import OpenAICompatProvider
+    from codeguild.providers.openai_compat import OpenAICompatProvider
 
     def fn(name=None, arguments=None):
         return NS(name=name, arguments=arguments)

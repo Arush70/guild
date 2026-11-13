@@ -1,4 +1,4 @@
-# Design System — guild dashboard
+# Design System — codeguild dashboard
 
 ## Style
 

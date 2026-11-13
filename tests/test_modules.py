@@ -8,15 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from guild import projectdocs
-from guild.config import Profile
-from guild.paths import ProjectPaths, atomic_write_text
-from guild.plan import Plan, PlanError, PlanStore, Task, UnknownTask
-from guild.providers.status import is_pulled, profile_status
-from guild.repo import Repo, TaskBranch, files_in_diff, slug
-from guild.sandbox import LocalSandbox
-from guild.tools import Workspace
-from guild.verify import Baseline, Verifier
+from codeguild import projectdocs
+from codeguild.config import Profile
+from codeguild.paths import ProjectPaths, atomic_write_text
+from codeguild.plan import Plan, PlanError, PlanStore, Task, UnknownTask
+from codeguild.providers.status import is_pulled, profile_status
+from codeguild.repo import Repo, TaskBranch, files_in_diff, slug
+from codeguild.sandbox import LocalSandbox
+from codeguild.tools import Workspace
+from codeguild.verify import Baseline, Verifier
 
 
 def _plan(*tasks: Task) -> Plan:
@@ -61,8 +61,8 @@ def test_edit_task_rejects_bad_values_and_changes_nothing():
 
 def test_a_revised_plan_keeps_what_was_done_under_the_same_id():
     old = _plan(
-        _task("T1", status="done", branch="guild/t1-x", merged=True, notes="n"),
-        _task("T2", status="blocked", branch="guild/t2-y"),
+        _task("T1", status="done", branch="codeguild/t1-x", merged=True, notes="n"),
+        _task("T2", status="blocked", branch="codeguild/t2-y"),
     )
     new = Plan.from_lead(
         "g2",
@@ -70,14 +70,14 @@ def test_a_revised_plan_keeps_what_was_done_under_the_same_id():
         previous=old,
     )
     t1, t2, t3 = new.tasks
-    assert (t1.status, t1.merged, t1.branch, t1.notes) == ("done", True, "guild/t1-x", "n")
-    assert (t2.status, t2.branch) == ("todo", "guild/t2-y")  # not done: gets another go
+    assert (t1.status, t1.merged, t1.branch, t1.notes) == ("done", True, "codeguild/t1-x", "n")
+    assert (t2.status, t2.branch) == ("todo", "codeguild/t2-y")  # not done: gets another go
     assert (t3.id, t3.status) == ("T3", "todo")
     assert new.created == old.created
 
 
 def test_plan_store_round_trip_and_unreadable_file(tmp_path: Path):
-    store = PlanStore(tmp_path / ".guild" / "plan.json")
+    store = PlanStore(tmp_path / ".codeguild" / "plan.json")
     assert store.load() is None
     store.save(_plan(_task("T1", files=["a.py"])))
     assert store.load().find("T1").files == ["a.py"]
@@ -119,8 +119,8 @@ def test_commit_all_leaves_guild_files_and_the_owners_untracked_files(repo: Repo
     (root / "mine.txt").write_text("owner's scratch file\n")
     before = repo.untracked()
     (root / "new.py").write_text("x = 1\n")
-    (root / ".guild").mkdir(exist_ok=True)
-    (root / ".guild" / "plan.json").write_text("{}")
+    (root / ".codeguild").mkdir(exist_ok=True)
+    (root / ".codeguild" / "plan.json").write_text("{}")
     assert repo.commit_all("add new", leave_untracked=before).committed
     committed = _git(root, "show", "--name-only", "--format=", "HEAD").split()
     assert committed == ["new.py"]
@@ -131,29 +131,29 @@ def test_commit_all_leaves_guild_files_and_the_owners_untracked_files(repo: Repo
 def test_merge_refuses_a_dirty_tree_and_discard_refuses_foreign_branches(repo: Repo):
     root = repo.root
     base = repo.current_branch()
-    _git(root, "checkout", "-q", "-b", "guild/t1-x")
+    _git(root, "checkout", "-q", "-b", "codeguild/t1-x")
     (root / "new.py").write_text("x = 1\n")
     repo.commit_all("task")
     _git(root, "checkout", "-q", base)
 
     (root / "app.py").write_text("changed = True\n")
-    assert "dirty" in repo.merge_branch("guild/t1-x", base)["error"]
+    assert "dirty" in repo.merge_branch("codeguild/t1-x", base)["error"]
     _git(root, "checkout", "--", "app.py")
 
     assert repo.discard_branch(base)["ok"] is False and repo.branch_exists(base)
-    merged = repo.merge_branch("guild/t1-x", base)
+    merged = repo.merge_branch("codeguild/t1-x", base)
     assert merged["ok"] and merged["base"] == base
-    assert (root / "new.py").exists() and not repo.branch_exists("guild/t1-x")
+    assert (root / "new.py").exists() and not repo.branch_exists("codeguild/t1-x")
 
 
 def test_task_branch_commits_the_work_and_returns_to_where_it_started(repo: Repo):
     warnings: list[str] = []
     start = repo.current_branch()
     branch = TaskBranch.start(repo, "T1", "Add a thing", dry_run=False, warn=warnings.append)
-    assert branch.name == "guild/t1-add-a-thing" == repo.current_branch()
+    assert branch.name == "codeguild/t1-add-a-thing" == repo.current_branch()
     (repo.root / "thing.py").write_text("x = 1\n")
     assert "thing.py" in branch.review_diff()
-    branch.commit("guild: T1")
+    branch.commit("codeguild: T1")
     branch.leave()
     assert repo.current_branch() == start and not (repo.root / "thing.py").exists()
     assert "thing.py" in repo.branch_diff(branch.name, start)["diff"]

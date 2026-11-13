@@ -1,6 +1,6 @@
 """Regression tests from the 2026-11-12 break-it audit.
 
-Each test reproduces a defect found by attacking guild the way an untrusted model, a careless
+Each test reproduces a defect found by attacking codeguild the way an untrusted model, a careless
 small model, or an interrupted run would. They all failed before the fixes in that audit.
 """
 
@@ -12,15 +12,15 @@ import subprocess
 
 import pytest
 
-from guild.agent import Agent, extract_text_tool_calls
-from guild.config import ProjectConfig, Role
-from guild.plan import Plan, Task
-from guild.providers.base import Completion, Message, ToolCall, Usage
-from guild.providers.router import Router
-from guild.sandbox import LocalSandbox
-from guild.tools import ToolContext, dispatch
-from guild.trace import Trace, read_trace
-from guild.workflow import Guild
+from codeguild.agent import Agent, extract_text_tool_calls
+from codeguild.config import ProjectConfig, Role
+from codeguild.plan import Plan, Task
+from codeguild.providers.base import Completion, Message, ToolCall, Usage
+from codeguild.providers.router import Router
+from codeguild.sandbox import LocalSandbox
+from codeguild.tools import ToolContext, dispatch
+from codeguild.trace import Trace, read_trace
+from codeguild.workflow import Guild
 from tests.conftest import FakeProvider
 from tests.test_workflow import APPROVE, ENG_TOUCH, PLAN
 
@@ -75,9 +75,9 @@ def test_git_diff_ref_cannot_inject_options(project):
     [
         ".git/hooks/pre-commit",
         ".git/config",
-        ".guild/config.yaml",
-        ".guild/plan.json",
-        ".guild/roles/critic.yaml",
+        ".codeguild/config.yaml",
+        ".codeguild/plan.json",
+        ".codeguild/roles/critic.yaml",
         "sub/../.git/hooks/pre-commit",
         ".GIT/hooks/pre-commit",
     ],
@@ -87,24 +87,24 @@ def test_write_tools_refuse_git_and_guild_dirs(project, path):
     out = dispatch(ctx, "write_file", {"path": path, "content": "#!/bin/sh\necho pwned\n"})
     assert out.startswith("refused"), out
     assert not (project / ".git" / "hooks" / "pre-commit").exists()
-    assert not (project / ".guild" / "plan.json").exists()
+    assert not (project / ".codeguild" / "plan.json").exists()
 
 
 def test_edit_file_refuses_guild_config(project):
-    (project / ".guild").mkdir()
-    (project / ".guild" / "config.yaml").write_text("sandbox: docker\n")
+    (project / ".codeguild").mkdir()
+    (project / ".codeguild" / "config.yaml").write_text("sandbox: docker\n")
     ctx = _ctx(project)
     out = dispatch(
         ctx,
         "edit_file",
         {
-            "path": ".guild/config.yaml",
+            "path": ".codeguild/config.yaml",
             "old_text": "sandbox: docker",
             "new_text": "sandbox: local",
         },
     )
     assert out.startswith("refused"), out
-    assert "docker" in (project / ".guild" / "config.yaml").read_text()
+    assert "docker" in (project / ".codeguild" / "config.yaml").read_text()
 
 
 def test_docs_allowlist_cannot_write_markdown_inside_git(project):
@@ -318,8 +318,8 @@ def test_free_profile_never_calls_a_priced_model(profile):
 
 
 def test_prices_yaml_overrides_default_prices(project, cfg, profile):
-    (project / ".guild").mkdir(exist_ok=True)
-    (project / ".guild" / "prices.yaml").write_text(
+    (project / ".codeguild").mkdir(exist_ok=True)
+    (project / ".codeguild" / "prices.yaml").write_text(
         "fake/small: [1.0, 2.0]\nfake/big: 0\nbroken: nonsense\n"
     )
     g = Guild(project, cfg, profile)
@@ -364,7 +364,7 @@ def test_trace_survives_unserialisable_values_and_none_previews(tmp_path):
 
 
 def test_plan_schema_dedupes_ids_and_coerces_numeric_depends_on():
-    from guild.schemas import validate
+    from codeguild.schemas import validate
 
     data, err = validate(
         "lead",
@@ -383,7 +383,7 @@ def test_plan_schema_dedupes_ids_and_coerces_numeric_depends_on():
 
 
 def test_lead_review_accepts_common_synonyms():
-    from guild.schemas import validate
+    from codeguild.schemas import validate
 
     for word, want in (
         ("accepted", "ACCEPT"),
@@ -431,7 +431,7 @@ def test_revise_plan_keeps_merged_flag(project, cfg, profile):
     g = _guild(project, cfg, profile, fake)
     try:
         done = Task(**PLAN["tasks"][0])
-        done.status, done.merged, done.branch = "done", True, "guild/t1-x"
+        done.status, done.merged, done.branch = "done", True, "codeguild/t1-x"
         g.plans.save(Plan(goal="g", roadmap=[], tasks=[done]))
         new = g.revise_plan("add a second task")
         assert new.tasks[0].status == "done" and new.tasks[0].merged is True
@@ -471,7 +471,7 @@ def test_task_id_with_spaces_and_symbols_still_gets_a_branch(project, cfg, profi
     finally:
         g.close()
     assert out.accepted
-    assert out.task.branch and out.task.branch.startswith("guild/task-1-set-up")
+    assert out.task.branch and out.task.branch.startswith("codeguild/task-1-set-up")
     assert _branch(project) == out.task.branch
 
 
@@ -556,7 +556,7 @@ def test_commit_works_without_a_git_identity(project, cfg, profile, monkeypatch,
     subprocess.run(["git", "commit", "-qm", "notes"], cwd=project, check=True)
     # Hiding the global/system config below must not also change line-ending handling: on
     # Windows core.autocrlf=true comes from there, and without it every CRLF file suddenly
-    # looks modified (a dirty tree, so guild rightly makes no branch). Pin the current value.
+    # looks modified (a dirty tree, so codeguild rightly makes no branch). Pin the current value.
     autocrlf = subprocess.run(
         ["git", "config", "--get", "core.autocrlf"], cwd=project, capture_output=True, text=True
     ).stdout.strip()
@@ -592,11 +592,11 @@ def test_commit_works_without_a_git_identity(project, cfg, profile, monkeypatch,
     log = subprocess.run(
         ["git", "log", "--oneline", "-3"], cwd=project, capture_output=True, text=True
     ).stdout
-    assert "guild(T1)" in log, log
+    assert "codeguild(T1)" in log, log
 
 
 def test_review_diff_is_not_a_git_error_message(project):
-    from guild.repo import Repo, TaskBranch
+    from codeguild.repo import Repo, TaskBranch
 
     branch = TaskBranch(Repo(project), warn=lambda msg: None)
     branch.base_ref = "does-not-exist-ref"

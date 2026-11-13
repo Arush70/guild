@@ -1,6 +1,6 @@
 'use strict';
-// A scripted OpenAI-compatible model server (guild's "custom" provider points at it), so the
-// whole chain — extension → guild server → model → tools → git — runs for real in tests.
+// A scripted OpenAI-compatible model server (codeguild's "custom" provider points at it), so the
+// whole chain — extension → codeguild server → model → tools → git — runs for real in tests.
 
 const http = require('http');
 

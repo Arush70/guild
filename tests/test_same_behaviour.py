@@ -1,5 +1,5 @@
 """Behaviour the 2026-11-12 restructuring changed by accident and an independent review caught.
-Each test is one of those differences, pinned to what guild did before."""
+Each test is one of those differences, pinned to what codeguild did before."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from guild.cli import app
-from guild.config import ProjectConfig, load_role, save_project_config
-from guild.plan import Plan, Task
-from guild.trace import jsonable
-from guild.workflow import Guild, TaskOutcome
+from codeguild.cli import app
+from codeguild.config import ProjectConfig, load_role, save_project_config
+from codeguild.plan import Plan, Task
+from codeguild.trace import jsonable
+from codeguild.workflow import Guild, TaskOutcome
 
 from .conftest import FakeProvider
 from .test_pair import NEW_FILE, _idle, _pair_script, _until, make_ui  # noqa: F401 — fixture
@@ -62,8 +62,8 @@ def test_engineer_gets_the_push_back_after_two_replies_without_changes(
 def test_a_projects_own_engineer_role_keeps_the_profile_tool_budget(project, small_team, profile):
     packaged = load_role("engineer", project).model_dump()
     packaged.pop("task_budget")  # a role file written before the field existed
-    (project / ".guild" / "roles").mkdir(parents=True)
-    (project / ".guild" / "roles" / "engineer.yaml").write_text(yaml.safe_dump(packaged))
+    (project / ".codeguild" / "roles").mkdir(parents=True)
+    (project / ".codeguild" / "roles" / "engineer.yaml").write_text(yaml.safe_dump(packaged))
     profile.limits.max_tool_calls_per_task = 150
     g = Guild(project, small_team, profile)
     assert g.agent("engineer").max_tool_calls == 150
@@ -72,9 +72,9 @@ def test_a_projects_own_engineer_role_keeps_the_profile_tool_budget(project, sma
 
 
 def test_a_task_is_never_based_on_a_guild_branch(project, small_team, profile):
-    """Started from a guild branch no task owns, then re-run from its own branch: both times
+    """Started from a codeguild branch no task owns, then re-run from its own branch: both times
     the merge target is the default branch."""
-    subprocess.run(["git", "checkout", "-q", "-b", "guild/t0-old"], cwd=project, check=True)
+    subprocess.run(["git", "checkout", "-q", "-b", "codeguild/t0-old"], cwd=project, check=True)
     plan = _one_task()
     for content in ("y = 2\n", "y = 33\n"):
         write = [
@@ -110,9 +110,11 @@ def test_job_results_keep_their_shape_and_leave_the_message_history_out(
 @pytest.fixture
 def cli_project(project, small_team, profile, use_models):
     save_project_config(project, small_team)
-    (project / ".guild" / "profiles").mkdir(parents=True, exist_ok=True)
+    (project / ".codeguild" / "profiles").mkdir(parents=True, exist_ok=True)
     profile.limits.max_revision_rounds = 1
-    (project / ".guild" / "profiles" / "test.yaml").write_text(yaml.safe_dump(profile.model_dump()))
+    (project / ".codeguild" / "profiles" / "test.yaml").write_text(
+        yaml.safe_dump(profile.model_dump())
+    )
     plan = Plan(
         goal="g",
         roadmap=[],

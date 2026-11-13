@@ -9,15 +9,15 @@ import time
 import pytest
 from typer.testing import CliRunner
 
-from guild.config import ProjectConfig, save_project_config
-from guild.errors import Cancelled
-from guild.plan import Plan, Task
-from guild.providers.base import Completion, Message, Usage
-from guild.sandbox import LocalSandbox
-from guild.tools import ToolContext, dispatch
-from guild.tools.registry import approval_request
-from guild.trace import read_trace
-from guild.workflow import Guild, PairSession
+from codeguild.config import ProjectConfig, save_project_config
+from codeguild.errors import Cancelled
+from codeguild.plan import Plan, Task
+from codeguild.providers.base import Completion, Message, Usage
+from codeguild.sandbox import LocalSandbox
+from codeguild.tools import ToolContext, dispatch
+from codeguild.tools.registry import approval_request
+from codeguild.trace import read_trace
+from codeguild.workflow import Guild, PairSession
 from tests.conftest import FakeProvider
 
 NEW_FILE = ("write_file", {"path": "hello.py", "content": "print('hi')\n"})
@@ -137,7 +137,7 @@ def test_pair_ask_mode_applies_approved_changes_in_the_working_tree(project, cfg
     branch = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=project, capture_output=True, text=True
     ).stdout.strip()
-    assert not branch.startswith("guild/")
+    assert not branch.startswith("codeguild/")
     assert (
         "hello.py"
         in subprocess.run(
@@ -188,7 +188,7 @@ def test_pair_keeps_the_safety_model(project, cfg, profile):
     (project / ".env").write_text("KEY=secret\n")
     turns = [
         ("write_file", {"path": ".git/hooks/pre-commit", "content": "#!/bin/sh\n"}),
-        ("write_file", {"path": ".guild/config.yaml", "content": "sandbox: local\n"}),
+        ("write_file", {"path": ".codeguild/config.yaml", "content": "sandbox: local\n"}),
         ("read_file", {"path": ".env"}),
     ]
     g = _guild(project, cfg, profile, _pair_script(*turns, final="nope"))
@@ -249,7 +249,7 @@ def test_sandbox_timeout_still_works(project):
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from guild.ui import server  # noqa: E402
+from codeguild.ui import server  # noqa: E402
 
 
 @pytest.fixture
@@ -257,8 +257,10 @@ def make_ui(project, cfg, profile, use_models):
     import yaml
 
     save_project_config(project, cfg)
-    (project / ".guild" / "profiles").mkdir(parents=True, exist_ok=True)
-    (project / ".guild" / "profiles" / "test.yaml").write_text(yaml.safe_dump(profile.model_dump()))
+    (project / ".codeguild" / "profiles").mkdir(parents=True, exist_ok=True)
+    (project / ".codeguild" / "profiles" / "test.yaml").write_text(
+        yaml.safe_dump(profile.model_dump())
+    )
 
     def make(fake):
         use_models(fake)
@@ -352,14 +354,16 @@ def test_chat_history_survives_a_server_restart(make_ui, project):
     ui = make_ui(fake)
     ui.post("/api/pair", json={"message": "hello there", "mode": "plan"})
     _idle(ui, "pair")
-    assert (project / ".guild" / "chat.jsonl").exists()
+    assert (project / ".codeguild" / "chat.jsonl").exists()
     again = make_ui(fake)  # a new app = a restarted server
     chat = again.get("/api/chat").json()
     assert [m["content"] for m in chat] == ["hello there", "Nothing to do."]
     assert again.delete("/api/chat").json() == []
-    assert not (project / ".guild" / "chat.jsonl").exists()
+    assert not (project / ".codeguild" / "chat.jsonl").exists()
     # a corrupt line must not break loading
-    (project / ".guild" / "chat.jsonl").write_text('{"role": "user", "content": "ok"}\n{broken\n')
+    (project / ".codeguild" / "chat.jsonl").write_text(
+        '{"role": "user", "content": "ok"}\n{broken\n'
+    )
     assert len(make_ui(fake).get("/api/chat").json()) == 1
 
 
@@ -369,11 +373,13 @@ def test_chat_history_survives_a_server_restart(make_ui, project):
 def test_cli_pair_session(project, cfg, profile, use_models):
     import yaml
 
-    from guild.cli import app
+    from codeguild.cli import app
 
     save_project_config(project, cfg)
-    (project / ".guild" / "profiles").mkdir(parents=True, exist_ok=True)
-    (project / ".guild" / "profiles" / "test.yaml").write_text(yaml.safe_dump(profile.model_dump()))
+    (project / ".codeguild" / "profiles").mkdir(parents=True, exist_ok=True)
+    (project / ".codeguild" / "profiles" / "test.yaml").write_text(
+        yaml.safe_dump(profile.model_dump())
+    )
     second = ("write_file", {"path": "two.py", "content": "x = 2\n"})
     use_models(
         FakeProvider({"pair": [[NEW_FILE], [second], "First turn done.", "Second turn done."]})

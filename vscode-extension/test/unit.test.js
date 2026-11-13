@@ -14,7 +14,7 @@ test('eventLine renders the events the server sends and ignores tokens', () => {
   assert.match(fmt.eventLine({ kind: 'phase', phase: 'implement', task_id: 'T1', round: 2, ts: 1 }).text, /▶ implement T1 \(round 2\)/);
   assert.match(fmt.eventLine({ kind: 'verification', passed: false, tests_run: 3, failures: ['a', 'b'] }).text, /tests: FAIL \(3 run\) — a; b/);
   assert.match(fmt.eventLine({ kind: 'tool_call', role: 'engineer', tool: 'write_file', ok: true, args: { path: 'a.py' }, result_preview: 'created\na.py' }).text, /engineer write_file\(path="a.py"\) → created a.py/);
-  assert.match(fmt.eventLine({ kind: 'task_end', task_id: 'T1', accepted: true, rounds: 1, cost_usd: 0, branch: 'guild/t1-x' }).text, /✔ task T1 ACCEPTED .* branch guild\/t1-x/);
+  assert.match(fmt.eventLine({ kind: 'task_end', task_id: 'T1', accepted: true, rounds: 1, cost_usd: 0, branch: 'codeguild/t1-x' }).text, /✔ task T1 ACCEPTED .* branch codeguild\/t1-x/);
   assert.match(fmt.eventLine({ kind: 'job_error', job: 'run', error: 'boom' }).text, /✖ run failed: boom/);
   assert.match(fmt.eventLine({ kind: 'approval_request', request: { kind: 'edit', path: 'a.py', new_file: true } }).text, /waiting for approval: create a.py/);
   assert.match(fmt.eventLine({ kind: 'approval', approved: false, tool: 'run_command', target: 'rm -rf x' }).text, /declined: run_command rm -rf x/);
@@ -32,10 +32,10 @@ test('taskView encodes status and branch state for menus', () => {
   const todo = fmt.taskView({ id: 'T1', title: 'a', status: 'todo', depends_on: ['T0'] });
   assert.strictEqual(todo.contextValue, 'task todo');
   assert.match(todo.description, /after T0/);
-  const ready = fmt.taskView({ id: 'T1', title: 'a', status: 'done', branch: 'guild/t1', base: 'main' });
+  const ready = fmt.taskView({ id: 'T1', title: 'a', status: 'done', branch: 'codeguild/t1', base: 'main' });
   assert.strictEqual(ready.contextValue, 'task done hasBranch');
-  assert.deepStrictEqual(ready.details.find(([k]) => k === 'Branch'), ['Branch', 'guild/t1 (from main)']);
-  const merged = fmt.taskView({ id: 'T1', title: 'a', status: 'done', branch: 'guild/t1', merged: true });
+  assert.deepStrictEqual(ready.details.find(([k]) => k === 'Branch'), ['Branch', 'codeguild/t1 (from main)']);
+  const merged = fmt.taskView({ id: 'T1', title: 'a', status: 'done', branch: 'codeguild/t1', merged: true });
   assert.strictEqual(merged.contextValue, 'task done merged');
   assert.strictEqual(merged.icon, 'git-merge');
   // unknown status from a hand-edited plan must not break the tree
@@ -67,13 +67,13 @@ test('parseSseBlock ignores comments, retry lines and broken JSON', () => {
 });
 
 test('splitCommand honours quotes; candidates prefer the configured command', () => {
-  assert.deepStrictEqual(server.splitCommand('"C:\\My Tools\\guild.exe" --x'), ['C:\\My Tools\\guild.exe', '--x']);
-  assert.deepStrictEqual(server.splitCommand('py -m guild.cli'), ['py', '-m', 'guild.cli']);
+  assert.deepStrictEqual(server.splitCommand('"C:\\My Tools\\codeguild.exe" --x'), ['C:\\My Tools\\codeguild.exe', '--x']);
+  assert.deepStrictEqual(server.splitCommand('py -m codeguild.cli'), ['py', '-m', 'codeguild.cli']);
   assert.deepStrictEqual(server.splitCommand(''), []);
-  const c = server.candidates({ workspace: os.tmpdir(), configured: 'py -m guild.cli', python: '/usr/bin/python3' });
-  assert.deepStrictEqual(c[0], ['py', '-m', 'guild.cli']);
-  assert.deepStrictEqual(c[c.length - 1], ['guild']);
-  assert.ok(c.some((a) => a.join(' ') === '/usr/bin/python3 -m guild.cli'));
+  const c = server.candidates({ workspace: os.tmpdir(), configured: 'py -m codeguild.cli', python: '/usr/bin/python3' });
+  assert.deepStrictEqual(c[0], ['py', '-m', 'codeguild.cli']);
+  assert.deepStrictEqual(c[c.length - 1], ['codeguild']);
+  assert.ok(c.some((a) => a.join(' ') === '/usr/bin/python3 -m codeguild.cli'));
 });
 
 test('client: errors carry the server detail; replayed and repeated events are handled', async () => {
@@ -125,13 +125,13 @@ test('client: errors carry the server detail; replayed and repeated events are h
 });
 
 test('server.start reports every command it tried when none works', async () => {
-  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'guild-empty-'));
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'codeguild-empty-'));
   const saved = process.env.PATH;
   process.env.PATH = empty;
   try {
     await assert.rejects(
-      server.start({ workspace: empty, configured: 'no-such-guild-binary --flag', timeoutMs: 3000 }),
-      (e) => e.tried.length === 2 && /no-such-guild-binary --flag: command not found/.test(e.message) && /guild: command not found/.test(e.message)
+      server.start({ workspace: empty, configured: 'no-such-codeguild-binary --flag', timeoutMs: 3000 }),
+      (e) => e.tried.length === 2 && /no-such-codeguild-binary --flag: command not found/.test(e.message) && /codeguild: command not found/.test(e.message)
     );
   } finally {
     process.env.PATH = saved;

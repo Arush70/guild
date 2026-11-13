@@ -1,6 +1,6 @@
-# Development Rules — guild
+# Development Rules — codeguild
 
-These rules apply to any AI (Claude Code, guild's own agents) or human changing this repo.
+These rules apply to any AI (Claude Code, codeguild's own agents) or human changing this repo.
 
 ## Before coding
 
@@ -25,8 +25,8 @@ These rules apply to any AI (Claude Code, guild's own agents) or human changing 
 - Tools resolve inside the project root and refuse `..`.
 - critic / security / verifier / assistant are read-only. docs writes `*.md` only.
 - `*KEY*`, `*TOKEN*`, `*SECRET*`, `*PASSWORD*` env vars are stripped from subprocesses.
-- guild never commits unless it created the branch; never merges/pushes on its own.
-- `.guild/` is never committed by guild and never appears in review diffs.
+- codeguild never commits unless it created the branch; never merges/pushes on its own.
+- `.codeguild/` is never committed by codeguild and never appears in review diffs.
 - The `free` profile refuses any model whose price is > 0.
 - The dashboard binds to 127.0.0.1 only.
 
@@ -49,7 +49,7 @@ These rules apply to any AI (Claude Code, guild's own agents) or human changing 
 
 - Small commits with descriptive messages (`feat:`, `fix:`, `docs:` prefixes welcome).
 - Work on `main` for now; use branches for multi-day features.
-- Never run `guild plan` / `guild run` inside this repo — use a separate project folder.
+- Never run `codeguild plan` / `codeguild run` inside this repo — use a separate project folder.
 
 ## Documentation
 

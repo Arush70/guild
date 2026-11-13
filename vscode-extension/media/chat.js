@@ -1,4 +1,4 @@
-// Webview side of the "Chat & Activity" view. It never talks to the guild server itself:
+// Webview side of the "Chat & Activity" view. It never talks to the codeguild server itself:
 // everything goes through the extension (postMessage), which owns the HTTP connection.
 (function () {
   const vscode = acquireVsCodeApi();
@@ -48,7 +48,7 @@
   function update() {
     send.disabled = busy || !ready;
     const ask = mode.value === 'chat' ? 'Ask about this project' : mode.value === 'plan' ? 'Ask for a plan (nothing is changed)' : 'Say what to change';
-    input.placeholder = !ready ? 'guild is not running' : busy ? 'guild is busy…' : ask + ' (Enter to send, Shift+Enter for a new line)';
+    input.placeholder = !ready ? 'codeguild is not running' : busy ? 'codeguild is busy…' : ask + ' (Enter to send, Shift+Enter for a new line)';
   }
 
   // Pair mode: a change the agent wants to make, waiting for the owner.

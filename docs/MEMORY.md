@@ -1,13 +1,28 @@
-# Project Memory — guild
+# Project Memory — codeguild
 
 Current state of the project. Update at the end of every working session.
 
 ## Current status (2026-10-02)
 
-v0.2.x. 373 tests with scripted fake models (193 at the time of this entry); `ruff check` + `ruff format --check` clean (rule set
+v0.3.0 (renamed to codeguild). 381 tests with scripted fake models (193 at the time of this entry); `ruff check` + `ruff format --check` clean (rule set
 pinned). TASK-001 has one accepted free-profile real-model run; TASK-002 guards are in. A full
 code audit on 2026-10-02 fixed 14 defects (see CHANGELOG "Unreleased") — none of it is confirmed
 on a real model run yet; that re-run is the next step.
+
+## 0.3.0, 2026-11-13: renamed to codeguild, IDE dashboard
+
+- **Rename** (ADR-021): everything is `codeguild` — pip name, import, command, `.codeguild/`,
+  `codeguild/<task>` branches, VS Code ids (`codeguild.*`). `.guild/` projects are migrated on
+  first use (`paths.adopt_legacy_project`). The GitHub repository is still `Arush70/guild`.
+- **Dashboard** (ADR-022) rewritten as an IDE around a vendored Monaco: explorer, editor tabs
+  with save, task changes as per-file before/after, approvals as diffs, bottom panel, team in
+  the status bar. New endpoints: `POST /api/file`, `/api/branches/{id}/files` and `/file`.
+  Checked in headless Chrome (walkthrough, a full plan → run → diff → pair approval against the
+  scripted model, and a markup-injection sweep); those scripts are not in the repository.
+- **Trust** is per folder now, and `codeguild init` trusts what it sets up; the first version
+  asked owners to re-approve their own committed config.
+- **PyPI**: not uploaded. `python -m build` and `twine check` pass; the wheel is about 6 MB
+  because of Monaco. Before uploading: a green Windows CI run, one real-model task.
 
 ## Break-it audit 2, 2026-11-12 (after the untangle refactor)
 
@@ -31,13 +46,13 @@ and page, providers, verification. All found with running code; each has a test 
   `.pyc` could make a test run the previous version of a file.
 - **Verification**: skipping/xfailing every test, or forcing exit code 0 in a conftest hook,
   passed broken code.
-- **Project root**: after the dashboard had written `~/.guild/recent.json`, any folder under
+- **Project root**: after the dashboard had written `~/.codeguild/recent.json`, any folder under
   home without `.git` resolved to the *home directory* as the project.
 - **Dashboard**: XSS through a role file name and through numbers in a trace file; a broken
   `config.yaml` made every page load a 500; another localhost port counted as same-origin;
   cancel during job start-up hit the previous job; an HTML error page from a gateway in
   stream mode was an "empty reply" instead of a failed call.
-- **No lock**: two guild processes (terminal dashboard + the extension's) could run jobs on
+- **No lock**: two codeguild processes (terminal dashboard + the extension's) could run jobs on
   one folder at once. `ProjectLock` (ADR-018).
 - Also: Windows aliases of `.git`/`.env` (`.GIT`, `.git.`, `GIT~1`, `.env::$DATA`), UNC paths,
   a new `.env` committed/reviewed, plan.json values of the wrong type, dependency circles.
@@ -46,8 +61,8 @@ Third pass (2026-11-13), closing what the audit had left open:
 
 - `search` matches in a worker process (`tools/_regex_worker.py`) that is killed after 20 s;
   a pattern like `(a+)+$` used to hang the agent thread for good.
-- A repository whose `.guild` configuration is *tracked by git* must be approved once with
-  `guild trust` before any job runs (`trust.py`, ADR-020); a change to those files asks again.
+- A repository whose `.codeguild` configuration is *tracked by git* must be approved once with
+  `codeguild trust` before any job runs (`trust.py`, ADR-020); a change to those files asks again.
 - `web_fetch` connects to the address it vetted (Host header and TLS name stay the host
   name), so a second DNS answer cannot redirect it to localhost.
 - Anthropic model ids and prices updated from the models page (fable-5-2, opus-5-5,
@@ -67,7 +82,7 @@ the trust check.
 
 Whole-codebase restructuring with no intended behaviour change; the full decision log is
 `docs/UNTANGLE.md`. `workflow.py` went from ~1300 to ~750 lines: the plan (`plan.py`), git
-(`repo.py`), verification (`verify.py`), `.guild` paths (`paths.py`), path scoping
+(`repo.py`), verification (`verify.py`), `.codeguild` paths (`paths.py`), path scoping
 (`tools/context.py`) and command policy (`tools/policy.py`) are modules of their own, and the
 CLI and dashboard use them instead of private `Guild` methods or raw dicts. 229 Python tests,
 22 extension tests. Not yet run on Windows or with a real model — do that before trusting it.
@@ -80,13 +95,13 @@ Full list in CHANGELOG "Unreleased". The ones that change how the next real run 
 
 - Push-back after "blocked" (the exact path the first real run took): the files the engineer
   then created were never committed, so the branch and the review diff lacked them. Fixed.
-- Ollama streams every tool call of a turn with index 0; guild glued them into one broken call.
+- Ollama streams every tool call of a turn with index 0; codeguild glued them into one broken call.
   Fixed (split on a new call id). Text tool calls whose file content contains a lone `{`/`}` or
   raw newlines are parsed now.
 - Free profile + a Groq/Gemini key: those models have a list price, so the $0 rule has always
   rejected them — but only after sending the request. They are skipped before the call now.
-  To actually use a free tier on `free`, set the model to 0 in `.guild/prices.yaml`
-  (`groq/llama-3.3-70b-versatile: 0`). OPEN DECISION for the owner: should `guild init` write
+  To actually use a free tier on `free`, set the model to 0 in `.codeguild/prices.yaml`
+  (`groq/llama-3.3-70b-versatile: 0`). OPEN DECISION for the owner: should `codeguild init` write
   that file when it adds free-tier models to the free profile? (Not done: RULES says the $0
   rule is never weakened without a decision.)
 - Ctrl+C no longer strands a task in `in_progress`.
@@ -98,7 +113,7 @@ Full list in CHANGELOG "Unreleased". The ones that change how the next real run 
 
 ## Pair mode (2026-11-12)
 
-`guild pair` / `/api/pair` / pair modes in the dashboard and VS Code chat (TASK-030, ADR-016).
+`codeguild pair` / `/api/pair` / pair modes in the dashboard and VS Code chat (TASK-030, ADR-016).
 Verified with scripted models only, including the extension e2e test (approve, decline, open
 diff, cancel a running command). NOT yet tried on a real model. Expect the free profile's 7b
 model to be weak here; the role prompt is `data/roles/pair.yaml`. Known limit: between turns
@@ -109,11 +124,11 @@ has the same objects for clients that connect late.
 
 ## VS Code extension (2026-11-12)
 
-`vscode-extension/` v0.1.0 exists (TASK-040, ADR-014). It is a client of `guild ui`; any API
+`vscode-extension/` v0.1.0 exists (TASK-040, ADR-014). It is a client of `codeguild ui`; any API
 change in `ui/server.py` must keep `vscode-extension/test/e2e.test.js` green. The e2e test also
 proves the Python side against an Ollama-shaped stream (all tool calls on index 0). Not yet
-done: a manual click-through in real VS Code on Windows. On the owner's machine `guild.command`
-must point at `C:\Machine Learning projects\guild\.venv\Scripts\guild.exe` unless that venv
+done: a manual click-through in real VS Code on Windows. On the owner's machine `codeguild.command`
+must point at `C:\Machine Learning projects\guild\.venv\Scripts\codeguild.exe` unless that venv
 is on PATH. Owner decided the web dashboard may vendor Monaco for an IDE layout (ADR-015,
 TASK-041, not started).
 
@@ -122,12 +137,12 @@ TASK-041, not started).
 - The "ruff 92 findings" were default-rule drift between ruff versions, not code problems; the
   rule set is now pinned in `pyproject.toml` and the code is `ruff format`ted. Keep both green.
 - Windows: pytest/git output is decoded as UTF-8 with replacement (cp1252 crashed on `—`);
-  a hung test run is killed as a tree (`taskkill /F /T`) instead of hanging guild.
+  a hung test run is killed as a tree (`taskkill /F /T`) instead of hanging codeguild.
 - Dashboard merge wrote `task.merged` into plan.json, which `Task(**t)` could not load → every
   later run/chat/status died. `Task.merged` exists now and unknown keys are ignored.
 - Verification created `__pycache__`/`.pytest_cache` *after* `_pre_untracked` was captured, so
   they were committed; after a merge they were tracked-and-modified → "dirty" → no more
-  branches. Excluded via pathspecs; `guild init` gitignores them.
+  branches. Excluded via pathspecs; `codeguild init` gitignores them.
 - Critic/security replies that never parsed (3 tries) were `None` and counted as approval.
 - Branching: rejected tasks go back to the start branch; accepted ones stay (so run-all
   stacks dependent tasks); merge refuses self-merge; no branch on an unborn HEAD.
@@ -137,8 +152,8 @@ TASK-041, not started).
 
 ## Latest real run (2026-09-27, Ollama qwen2.5-coder:7b, free profile)
 
-- TASK-001 T1 was ACCEPTED in one round on branch `guild/t1-add-multiply-function-and-test`.
-- Trace: `C:\Machine Learning projects\Demo\.guild\runs\20260927-171904-486bcc\trace.jsonl`.
+- TASK-001 T1 was ACCEPTED in one round on branch `codeguild/t1-add-multiply-function-and-test`.
+- Trace: `C:\Machine Learning projects\Demo\.codeguild\runs\20260927-171904-486bcc\trace.jsonl`.
 - The Engineer emitted three tool calls as text; Guild executed two successful `write_file`
   calls for `app.py` and `test_app.py`, followed by `run_tests` (2 passed). Deterministic
   verification passed; critic, security, and lead approved. Run cost was $0.00.
@@ -160,7 +175,7 @@ TASK-041, not started).
 - Engineer got "no such file: app.py" and reported **blocked** instead of creating it. ✘
   → fixed: task brief lists missing files; first "blocked" is pushed back once.
 - `run selected` ran T3 before T2 was done. ✘ → fixed: unfinished dependencies are skipped.
-- Folder had no git repo (Doctor `git: no`) → no branches. → `guild init` now offers
+- Folder had no git repo (Doctor `git: no`) → no branches. → `codeguild init` now offers
   `git init`; dashboard shows a warning banner.
 - pytest on an empty project returned exit 5 ("no tests collected") and counted as failure.
   → fixed.
@@ -178,7 +193,7 @@ TASK-041, not started).
 ## Current task
 
 TASK-003 in `TASKS.md`. First re-run the Demo T1 with the TASK-002 guards (discard the old
-`guild/t1-add-multiply-function-and-test` branch in Demo first — it deleted `add`), then the
+`codeguild/t1-add-multiply-function-and-test` branch in Demo first — it deleted `add`), then the
 4-task calculator plan with run all.
 
 ## Known issues

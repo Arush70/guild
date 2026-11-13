@@ -1,5 +1,5 @@
 'use strict';
-// HTTP + Server-Sent-Events client for the guild dashboard API (`guild ui`).
+// HTTP + Server-Sent-Events client for the codeguild dashboard API (`codeguild ui`).
 // Runs in the extension host (Node). No `vscode` import here so it can be tested with plain node.
 //
 // All requests are made from Node on purpose: the server refuses state-changing requests that

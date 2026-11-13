@@ -1,4 +1,4 @@
-# Test Plan — guild
+# Test Plan — codeguild
 
 "Working" means all three layers pass.
 
@@ -9,7 +9,7 @@
 - **Workflow** (`tests/test_workflow.py`): plan saves tasks; happy path accepts and documents;
   revision rounds + escalation; security block prevents acceptance; fallback chain; read-only
   roles can't write; docs allowlist; path escape refused; selected task order; verification
-  detects real failures; text tool-calls executed; `.guild` never committed; untracked files
+  detects real failures; text tool-calls executed; `.codeguild` never committed; untracked files
   tolerated; dirty tracked tree → no branch, no commit; merge/discard helpers; engineer
   "done" with no changes → blocked; false "blocked" → push-back → recovers; pytest exit 5 ok;
   unfinished dependency skipped; crash records traceback.
@@ -41,20 +41,20 @@ Script pattern in this session's history (`fakeplug3.py`): start `serve()` with 
 
 ## 3. Real-model acceptance (manual, the v1.0 gate)
 
-Environment: owner's laptop, Ollama, free profile written by `guild init`.
+Environment: owner's laptop, Ollama, free profile written by `codeguild init`.
 
 | # | Check | Pass when |
 |---|---|---|
-| R1 | `guild doctor` in Demo | every Ollama row `ready`, `git: yes` |
+| R1 | `codeguild doctor` in Demo | every Ollama row `ready`, `git: yes` |
 | R2 | plan "Add multiply(a,b) to app.py + test_multiply" | 1 task, no Plan-check warnings |
 | R3 | run next task | engineer writes files (tool_call events with `write_file`/`edit_file`), tests PASS, critic+security approve, lead ACCEPT, branch created |
 | R4 | diff → merge | main has multiply + test; branch deleted |
 | R5 | plan "build a calculator" → run all | 4/4 accepted, each merged; total < 30 min |
 | R6 | repeat R5 from a fresh folder ×3 | 3/3 |
-| R7 | lite profile with ANTHROPIC_API_KEY | R3 passes; `guild cost` ≤ cap; Lead is Claude in trace |
+| R7 | lite profile with ANTHROPIC_API_KEY | R3 passes; `codeguild cost` ≤ cap; Lead is Claude in trace |
 | R8 | chat: "what does app.py do?" | trace shows `list_files`/`read_file` before the answer; answer cites the file |
-| R9 | `guild watch --once` on Demo | critic + security print verdicts |
-| R10 | wheel install in clean venv | `guild init -y` + `guild doctor` work |
+| R9 | `codeguild watch --once` on Demo | critic + security print verdicts |
+| R10 | wheel install in clean venv | `codeguild init -y` + `codeguild doctor` work |
 
 Record results in `docs/MEMORY.md`.
 
@@ -63,4 +63,4 @@ Record results in `docs/MEMORY.md`.
 - Try a task whose description says "delete ../../something" → tool refused in trace.
 - Set `GROQ_API_KEY` with free profile → router never calls a priced model.
 - Dirty tracked file in project → "will NOT commit" warning; `git log` unchanged.
-- `.guild/` never in `git ls-files` after a run.
+- `.codeguild/` never in `git ls-files` after a run.

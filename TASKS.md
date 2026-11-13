@@ -1,13 +1,13 @@
-# Tasks — guild
+# Tasks — codeguild
 
 Work top to bottom. One task per Claude Code session. Each task: implement → `pytest` →
 review the diff → commit → tick here and update `docs/MEMORY.md`.
 
 ## Phase 1 — Prove the loop on real local models (v1.0 gate)
 
-- [x] TASK-001 Run the demo on `free` (`cd ..\Demo`, `guild ui`, goal "Add a multiply(a, b)
+- [x] TASK-001 Run the demo on `free` (`cd ..\Demo`, `codeguild ui`, goal "Add a multiply(a, b)
       function to app.py and a test_multiply test in test_app.py"). Read
-      `.guild/runs/<latest>/trace.jsonl`. Record what the 7b Engineer did in `docs/MEMORY.md`.
+      `.codeguild/runs/<latest>/trace.jsonl`. Record what the 7b Engineer did in `docs/MEMORY.md`.
 - [x] TASK-002 Fix whatever TASK-001 exposed (prompt or parsing, not architecture). Add a
       test reproducing the model behaviour. (Guards + tests landed 2026-10-02; the re-run of
       T1 on the real model with them is the first step of TASK-003.)
@@ -15,51 +15,53 @@ review the diff → commit → tick here and update `docs/MEMORY.md`.
       and merged. Note total wall time and tokens.
 - [ ] TASK-004 Repeat TASK-003 three times from a fresh folder; it must succeed 3/3.
 - [ ] TASK-005 Same demo on `lite` with `ANTHROPIC_API_KEY` set. Confirm cost stays under
-      `max_usd_per_run` and `guild cost` matches the provider dashboard within 20%.
+      `max_usd_per_run` and `codeguild cost` matches the provider dashboard within 20%.
 - [ ] TASK-006 Chat quality: ask 5 questions about the demo project; the Assistant must read
       files before answering (check trace for `list_files`/`read_file`). Tune the prompt if not.
 
 ## Phase 2 — Release
 
-- [ ] TASK-010 Check the PyPI name `guild-ai` is free (the `guild` name is taken by Guild AI).
-      If not, rename the package (candidates: `guild-agents`, `codeguild`) — update
-      `pyproject.toml`, README, CLAUDE.md, `console_scripts` stays `guild`.
-- [ ] TASK-011 (passes on Linux as of 2026-10-02; confirm on Windows) `python -m build`, install the wheel in a clean venv, run `guild init -y` and
-      `guild doctor` in a temp folder. Fix any missing package data.
+- [x] TASK-010 PyPI name: renamed the whole project to `codeguild` (ADR-021). Upload is still to
+      do: the owner publishes when ready (`python -m build`, `twine check` pass).
+- [ ] TASK-010 Check the PyPI name `codeguild` is free (the `codeguild` name is taken by Guild AI).
+      If not, rename the package (candidates: `codeguild-agents`, `codeguild`) — update
+      `pyproject.toml`, README, CLAUDE.md, `console_scripts` stays `codeguild`.
+- [ ] TASK-011 (passes on Linux as of 2026-10-02; confirm on Windows) `python -m build`, install the wheel in a clean venv, run `codeguild init -y` and
+      `codeguild doctor` in a temp folder. Fix any missing package data.
 - [ ] TASK-012 Publish `0.3.0` to TestPyPI, then PyPI. Tag `v1.0.0` once Phase 1 is 3/3.
 - [ ] TASK-013 README: replace the screenshot with one from a real accepted run; add a 30-second
       GIF of plan → run → merge.
 
 ## Phase 3 — Product depth
 
-- [ ] TASK-020 `guild init --docs`: scaffold `docs/PRD.md`, `docs/ARCHITECTURE.md`, `RULES.md`,
+- [ ] TASK-020 `codeguild init --docs`: scaffold `docs/PRD.md`, `docs/ARCHITECTURE.md`, `RULES.md`,
       `TASKS.md`, `docs/MEMORY.md` templates in a project (done in 0.2.x — verify on Windows).
 - [ ] TASK-021 Wire extra reviewers from `roles_enabled` (e.g. `performance`) into `run_task`.
 - [ ] TASK-022 Per-task git worktrees so two engineers can run in parallel on independent tasks.
 - [ ] TASK-023 `ux` and `data-quality` reviewer roles.
 - [ ] TASK-024 Optional CI job that runs the loop against a real Ollama (nightly, non-blocking).
-- [ ] TASK-025 Persist chat history to `.guild/chat.jsonl` so it survives restarts.
+- [ ] TASK-025 Persist chat history to `.codeguild/chat.jsonl` so it survives restarts.
 
 ## Phase 4 — IDE
 
-- [x] TASK-040 VS Code extension (`vscode-extension/`): starts `guild ui`, plan tree, run /
+- [x] TASK-040 VS Code extension (`vscode-extension/`): starts `codeguild ui`, plan tree, run /
       review / merge / discard, chat + live activity view, status bar. `npm test` there.
       Still to do by hand: install the `.vsix` in real VS Code on Windows and click through
       it once (the automated test uses a stand-in for the `vscode` module).
-- [ ] TASK-041 IDE-style web dashboard with a vendored Monaco editor (ADR-015): file tree,
-      editor tabs, per-file diff, bottom panel for log/chat. Update RULES.md with it.
+- [x] TASK-041 IDE-style web dashboard with a vendored Monaco editor (ADR-022), replacing the
+      old single-page dashboard.
 - [x] TASK-042 `POST /api/cancel`: stop any job without restarting the server (dashboard *stop*
-      button, extension "Stop Current Job", Ctrl+C in `guild pair`).
+      button, extension "Stop Current Job", Ctrl+C in `codeguild pair`).
 - [x] TASK-030 Pair mode (ADR-016): `pair` role, approval gate with diff preview, modes
-      ask / auto-edits / plan, `guild pair` in the CLI, `/api/pair` + `/api/approve/{id}`,
+      ask / auto-edits / plan, `codeguild pair` in the CLI, `/api/pair` + `/api/approve/{id}`,
       approval UI in the dashboard and the VS Code extension. Also done with it: chat history
-      persists in `.guild/chat.jsonl` (was TASK-025).
+      persists in `.codeguild/chat.jsonl` (was TASK-025).
       Still to do: try it on a real model (free: 7b in the `frontier` slot will be weak at this;
       `lite` is the realistic target) and tune `data/roles/pair.yaml` from the trace.
 - [ ] TASK-031 Pair/chat context: `@path` attaches files; keep tool results across turns (today
       only the text of earlier turns is replayed); compact long histories with the cheap slot.
-- [ ] TASK-034 Slash commands (`.guild/commands/<name>.md`) and write hooks.
-- [x] TASK-046 Close the audit's open items: regex timeout, `guild trust`, pinned web_fetch,
+- [ ] TASK-034 Slash commands (`.codeguild/commands/<name>.md`) and write hooks.
+- [x] TASK-046 Close the audit's open items: regex timeout, `codeguild trust`, pinned web_fetch,
       model ids, Windows CI (2026-11-13, ADR-020). Owner: check the first Windows CI run.
 - [x] TASK-045 Break-it audit 2 after the refactor (2026-11-12, docs/MEMORY.md, ADR-018/019).
 - [x] TASK-044 Untangle refactor of the whole codebase (2026-11-12, `docs/UNTANGLE.md`,

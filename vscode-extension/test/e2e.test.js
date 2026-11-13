@@ -1,9 +1,9 @@
 'use strict';
 // End to end: the real extension code (against a stand-in for the `vscode` module) starts a real
-// `guild ui` server, which talks to a scripted OpenAI-compatible model. Plans, runs a task on a
+// `codeguild ui` server, which talks to a scripted OpenAI-compatible model. Plans, runs a task on a
 // git branch, reviews the diff, merges, chats, then stops.
 //
-// Needs the `guild` command (pip install -e ".[dev]"). Skipped when it is not installed.
+// Needs the `codeguild` command (pip install -e ".[dev]"). Skipped when it is not installed.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -22,7 +22,7 @@ const vscode = require('vscode');
 const mock = vscode.__mock;
 const fakeModel = require('./fake-model');
 
-const GUILD = process.env.GUILD_COMMAND || 'guild';
+const GUILD = process.env.GUILD_COMMAND || 'codeguild';
 const hasGuild = cp.spawnSync(GUILD, ['--version'], { shell: process.platform === 'win32' }).status === 0;
 
 function git(cwd, ...args) {
@@ -32,18 +32,18 @@ function git(cwd, ...args) {
 }
 
 function makeProject() {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'guild-vsc-')));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeguild-vsc-')));
   fs.writeFileSync(path.join(dir, 'app.py'), 'def add(a, b):\n    return a + b\n');
   fs.writeFileSync(path.join(dir, 'test_app.py'), 'from app import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n');
-  fs.writeFileSync(path.join(dir, '.gitignore'), '.guild/\n__pycache__/\n.pytest_cache/\n');
-  fs.mkdirSync(path.join(dir, '.guild', 'profiles'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.gitignore'), '.codeguild/\n__pycache__/\n.pytest_cache/\n');
+  fs.mkdirSync(path.join(dir, '.codeguild', 'profiles'), { recursive: true });
   fs.writeFileSync(
-    path.join(dir, '.guild', 'config.yaml'),
+    path.join(dir, '.codeguild', 'config.yaml'),
     'profile: e2e\ntest_command: python -m pytest -q -p no:cacheprovider\nsandbox: local\n'
   );
   const slots = ['frontier', 'coder', 'reasoner', 'cheap'].map((s) => `  ${s}: [custom/fake]`).join('\n');
   fs.writeFileSync(
-    path.join(dir, '.guild', 'profiles', 'e2e.yaml'),
+    path.join(dir, '.codeguild', 'profiles', 'e2e.yaml'),
     `name: e2e\nslots:\n${slots}\nlimits:\n  max_revision_rounds: 2\n  max_usd_per_run: 0\n`
   );
   git(dir, 'init', '-q', '-b', 'main');
@@ -70,12 +70,12 @@ function taskElement() {
   return mock.tree.provider.getChildren()[0];
 }
 
-test('extension end to end against a real guild server', { skip: !hasGuild && 'guild is not installed', timeout: 240000 }, async (t) => {
+test('extension end to end against a real codeguild server', { skip: !hasGuild && 'codeguild is not installed', timeout: 240000 }, async (t) => {
   const model = await fakeModel.start();
-  process.env.CUSTOM_OPENAI_BASE_URL = model.url; // read by the guild server at start-up
+  process.env.CUSTOM_OPENAI_BASE_URL = model.url; // read by the codeguild server at start-up
   const project = makeProject();
   mock.workspaceFolder = project;
-  mock.config.command = GUILD === 'guild' ? '' : GUILD;
+  mock.config.command = GUILD === 'codeguild' ? '' : GUILD;
 
   const webviewOut = [];
   let toWebview;
@@ -99,12 +99,12 @@ test('extension end to end against a real guild server', { skip: !hasGuild && 'g
     model.srv.close();
   });
 
-  await t.test('starts the server for a folder that has .guild/config.yaml', async () => {
+  await t.test('starts the server for a folder that has .codeguild/config.yaml', async () => {
     assert.strictEqual(ctl.status, 'running', mock.channel.lines.join('\n'));
-    assert.strictEqual(mock.context['guild.state'], 'running');
-    assert.strictEqual(mock.context['guild.hasPlan'], false);
+    assert.strictEqual(mock.context['codeguild.state'], 'running');
+    assert.strictEqual(mock.context['codeguild.hasPlan'], false);
     assert.strictEqual(ctl.state.root, project);
-    assert.match(mock.bar.text, /guild/);
+    assert.match(mock.bar.text, /codeguild/);
   });
 
   await t.test('chat view renders with a strict CSP and receives status', async () => {
@@ -119,9 +119,9 @@ test('extension end to end against a real guild server', { skip: !hasGuild && 'g
 
   await t.test('New Plan asks for a goal and shows the tasks', async () => {
     mock.onInput = () => 'add a subtract function';
-    await vscode.commands.executeCommand('guild.plan');
+    await vscode.commands.executeCommand('codeguild.plan');
     await until('plan', () => !ctl.busy && ctl.state.plan && ctl.state.plan.tasks.length === 1);
-    assert.strictEqual(mock.context['guild.hasPlan'], true);
+    assert.strictEqual(mock.context['codeguild.hasPlan'], true);
     const el = taskElement();
     const item = mock.tree.provider.getTreeItem(el);
     assert.strictEqual(item.label, 'T1  add subtract');
@@ -133,11 +133,11 @@ test('extension end to end against a real guild server', { skip: !hasGuild && 'g
   });
 
   await t.test('Run Task implements on a branch, verifies, reviews and reports', async () => {
-    await vscode.commands.executeCommand('guild.runTask', taskElement());
-    assert.strictEqual(mock.context['guild.busy'], true);
+    await vscode.commands.executeCommand('codeguild.runTask', taskElement());
+    assert.strictEqual(mock.context['codeguild.busy'], true);
     await until('task done', () => !ctl.busy && ctl.state.plan.tasks[0].status === 'done');
     const task = ctl.state.plan.tasks[0];
-    assert.match(task.branch, /^guild\/t1-add-subtract/);
+    assert.match(task.branch, /^codeguild\/t1-add-subtract/);
     assert.strictEqual(task.base, 'main');
     assert.strictEqual(git(project, 'rev-parse', '--abbrev-ref', 'HEAD'), task.branch);
     assert.match(git(project, 'ls-tree', '-r', '--name-only', 'HEAD'), /calc\.py[\s\S]*test_calc\.py/);
@@ -157,7 +157,7 @@ test('extension end to end against a real guild server', { skip: !hasGuild && 'g
 
   await t.test('Review Changes shows the unified diff, or a native side-by-side diff per file', async () => {
     mock.onQuickPick = (items) => items[0]; // "Whole change"
-    await vscode.commands.executeCommand('guild.diffTask', taskElement());
+    await vscode.commands.executeCommand('codeguild.diffTask', taskElement());
     const doc = mock.shownDocs[mock.shownDocs.length - 1];
     assert.strictEqual(doc.uri.path, '/diff/T1.diff');
     assert.match(doc.getText(), /\+def subtract\(a, b\):/);
@@ -168,7 +168,7 @@ test('extension end to end against a real guild server', { skip: !hasGuild && 'g
     };
     mock.onQuickPick = (items) => items.find((i) => i.file && i.file.path === 'calc.py');
     const before = mock.executed.length;
-    await vscode.commands.executeCommand('guild.diffTask', taskElement());
+    await vscode.commands.executeCommand('codeguild.diffTask', taskElement());
     const call = mock.executed.slice(before).find((c) => c[0] === 'vscode.diff');
     assert.ok(call, 'vscode.diff was opened');
     assert.strictEqual(call[1], 'main:calc.py');
@@ -177,14 +177,14 @@ test('extension end to end against a real guild server', { skip: !hasGuild && 'g
 
   await t.test('Merge asks first, then merges into the branch the task started from', async () => {
     mock.onMessage = () => undefined; // user cancels the modal
-    await vscode.commands.executeCommand('guild.mergeTask', taskElement());
+    await vscode.commands.executeCommand('codeguild.mergeTask', taskElement());
     assert.notStrictEqual(git(project, 'rev-parse', '--abbrev-ref', 'HEAD'), 'main');
 
     mock.onMessage = (message, actions) => (actions.includes('Merge') ? 'Merge' : undefined);
-    await vscode.commands.executeCommand('guild.mergeTask', taskElement());
+    await vscode.commands.executeCommand('codeguild.mergeTask', taskElement());
     assert.strictEqual(git(project, 'rev-parse', '--abbrev-ref', 'HEAD'), 'main');
     assert.ok(fs.existsSync(path.join(project, 'calc.py')));
-    assert.ok(mock.messages.some((m) => m.level === 'info' && /merged guild\/t1-add-subtract.* into main/.test(m.message)));
+    assert.ok(mock.messages.some((m) => m.level === 'info' && /merged codeguild\/t1-add-subtract.* into main/.test(m.message)));
     assert.strictEqual(mock.tree.provider.getTreeItem(taskElement()).contextValue, 'task done merged');
     mock.onMessage = () => undefined;
   });
@@ -202,7 +202,7 @@ test('extension end to end against a real guild server', { skip: !hasGuild && 'g
 
   await t.test('a failing job surfaces as an error, not silence', async () => {
     const before = mock.messages.length;
-    await vscode.commands.executeCommand('guild.runTask', { type: 'task', task: { id: 'NOPE' } });
+    await vscode.commands.executeCommand('codeguild.runTask', { type: 'task', task: { id: 'NOPE' } });
     await until('job error', () => mock.messages.slice(before).some((m) => m.level === 'error' && /no task NOPE/.test(m.message)));
     await until('idle', () => !ctl.busy);
   });
@@ -210,14 +210,14 @@ test('extension end to end against a real guild server', { skip: !hasGuild && 'g
   await t.test('editing a task and the doctor/trace views work', async () => {
     const answers = ['add subtract (edited)', 'new description', 'test_subtract passes'];
     mock.onInput = () => answers.shift();
-    await vscode.commands.executeCommand('guild.editTask', taskElement());
+    await vscode.commands.executeCommand('codeguild.editTask', taskElement());
     assert.strictEqual(ctl.state.plan.tasks[0].title, 'add subtract (edited)');
 
-    await vscode.commands.executeCommand('guild.doctor');
+    await vscode.commands.executeCommand('codeguild.doctor');
     assert.ok(mock.channel.lines.some((l) => /custom\/fake/.test(l) && /configured/.test(l)));
 
     mock.onQuickPick = (items) => items.find((i) => /implement/.test(i.detail || '')) || items[0];
-    await vscode.commands.executeCommand('guild.showRuns');
+    await vscode.commands.executeCommand('codeguild.showRuns');
     const doc = mock.shownDocs[mock.shownDocs.length - 1];
     assert.match(doc.uri.path, /^\/runs\/.+\.log$/);
     assert.match(doc.getText(), /engineer\s+\d+ calls/);
@@ -231,7 +231,7 @@ test('extension end to end against a real guild server', { skip: !hasGuild && 'g
     assert.strictEqual(card.request.kind, 'edit');
     assert.strictEqual(card.request.path, 'hello.py');
     assert.match(card.request.preview, /\+print\('hello'\)/);
-    assert.ok(mock.messages.some((m) => m.message === 'Guild wants to create hello.py' && m.actions.includes('Open Diff')));
+    assert.ok(mock.messages.some((m) => m.message === 'Codeguild wants to create hello.py' && m.actions.includes('Open Diff')));
     assert.match(mock.bar.tooltip, /waiting for your approval/);
     assert.ok(!fs.existsSync(path.join(project, 'hello.py')), 'nothing is written before the answer');
     await toWebview({ type: 'approve', id: card.request.id, approve: false });
@@ -244,7 +244,7 @@ test('extension end to end against a real guild server', { skip: !hasGuild && 'g
 
   await t.test('pair mode: Open Diff shows the proposal, Approve applies it in the working tree', async () => {
     const answers = ['Open Diff', 'Approve'];
-    mock.onMessage = (message) => (/^Guild wants to/.test(message) ? answers.shift() : undefined);
+    mock.onMessage = (message) => (/^Codeguild wants to/.test(message) ? answers.shift() : undefined);
     const before = webviewOut.length;
     const executedBefore = mock.executed.length;
     await toWebview({ type: 'send', text: 'make hello.py', mode: 'ask' });
@@ -263,13 +263,13 @@ test('extension end to end against a real guild server', { skip: !hasGuild && 'g
   });
 
   await t.test('Stop Current Job cancels a running command without restarting the server', async () => {
-    mock.onMessage = (message) => (/^Guild wants to run/.test(message) ? 'Approve' : undefined);
+    mock.onMessage = (message) => (/^Codeguild wants to run/.test(message) ? 'Approve' : undefined);
     const proc = ctl.proc;
     const before = webviewOut.length;
     await toWebview({ type: 'send', text: 'do something slow', mode: 'auto-edits' });
     await until('command running', () => mock.channel.lines.some((l) => /approved: run_command/.test(l)));
     const t0 = Date.now();
-    await vscode.commands.executeCommand('guild.cancel');
+    await vscode.commands.executeCommand('codeguild.cancel');
     await until('cancelled', () => webviewOut.slice(before).some((m) => m.type === 'message' && m.text === 'Stopped.'));
     await until('idle', () => !ctl.busy);
     assert.ok(Date.now() - t0 < 15000, 'the 60 s command was killed');
@@ -281,27 +281,27 @@ test('extension end to end against a real guild server', { skip: !hasGuild && 'g
 
   await t.test('Stop ends the server process and the UI falls back to "stopped"', async () => {
     const proc = ctl.proc;
-    await vscode.commands.executeCommand('guild.stop');
+    await vscode.commands.executeCommand('codeguild.stop');
     assert.strictEqual(ctl.status, 'stopped');
-    assert.strictEqual(mock.context['guild.state'], 'stopped');
+    assert.strictEqual(mock.context['codeguild.state'], 'stopped');
     assert.ok(proc.exitCode !== null || proc.signalCode !== null, 'the server process ended');
     assert.deepStrictEqual(mock.tree.provider.getChildren(), []);
     await assert.rejects(ctl.run({}), /not running/);
   });
 });
 
-test('a folder without guild set up is not started automatically', async () => {
+test('a folder without codeguild set up is not started automatically', async () => {
   // a second controller in the same process: only checks the boot decision
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'guild-vsc-empty-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeguild-vsc-empty-'));
   mock.workspaceFolder = dir;
   const { activate, deactivate } = require('../extension');
   const ctl = await activate({ subscriptions: [], extensionUri: vscode.Uri.file(path.join(__dirname, '..')) });
   try {
     assert.strictEqual(ctl.status, 'uninitialised');
     assert.strictEqual(ctl.proc, null);
-    assert.ok(!fs.existsSync(path.join(dir, '.guild')), 'nothing was written into the folder');
-    await vscode.commands.executeCommand('guild.init');
-    assert.deepStrictEqual(mock.terminals[mock.terminals.length - 1].sent, ['guild init']);
+    assert.ok(!fs.existsSync(path.join(dir, '.codeguild')), 'nothing was written into the folder');
+    await vscode.commands.executeCommand('codeguild.init');
+    assert.deepStrictEqual(mock.terminals[mock.terminals.length - 1].sent, ['codeguild init']);
   } finally {
     deactivate();
   }

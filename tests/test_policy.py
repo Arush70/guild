@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from guild.tools.policy import blocked_url, readonly_allowed
+from codeguild.tools.policy import blocked_url, readonly_allowed
 
 
 @pytest.mark.parametrize(

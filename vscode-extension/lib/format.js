@@ -52,7 +52,7 @@ function eventLine(ev) {
     case 'fallback':
       return line(`! fallback: ${ev.model} failed (${oneLine(ev.reason)})`, 'warn');
     case 'note':
-      return line(`  ${ev.role || 'guild'}: ${oneLine(ev.msg, 300)}`);
+      return line(`  ${ev.role || 'codeguild'}: ${oneLine(ev.msg, 300)}`);
     case 'report':
       // "phase" and "fallback" reports are terminal text for events that are logged themselves
       if (ev.level === 'phase' || ev.level === 'fallback') return null;
@@ -97,7 +97,7 @@ const STATUS_ICON = {
 /** Presentation of a plan task for the tree. */
 function taskView(task, busy = true) {
   let status = STATUS_ICON[task.status] ? task.status : 'todo';
-  // "in_progress" while nothing is running is a leftover from a stopped run; guild will pick
+  // "in_progress" while nothing is running is a leftover from a stopped run; codeguild will pick
   // the task up again, so show it as waiting rather than spinning forever
   const interrupted = status === 'in_progress' && !busy;
   if (interrupted) status = 'todo';
@@ -150,7 +150,7 @@ function diffFiles(diff) {
 
 /** Plain-text rendering of a run's trace (GET /api/runs/<id>). */
 function traceText(runId, detail) {
-  const lines = [`guild run ${runId}`, ''];
+  const lines = [`codeguild run ${runId}`, ''];
   for (const [role, v] of Object.entries(detail.by_role || {})) {
     lines.push(
       `${role.padEnd(10)} ${String(v.calls).padStart(3)} calls  ${v.input_tokens}→${v.output_tokens} tok  ` +

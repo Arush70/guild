@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from guild.config import Profile, ProjectConfig
-from guild.providers.base import Completion, Message, ProviderError, ToolCall, Usage
+from codeguild.config import Profile, ProjectConfig
+from codeguild.providers.base import Completion, Message, ProviderError, ToolCall, Usage
 
 Script = Callable[[str, list[Message]], Completion]  # (model_name, messages) -> completion
 
@@ -126,7 +126,7 @@ def cfg() -> ProjectConfig:
 def use_models(monkeypatch):
     """Route the `fake/…` models of the test profile to a scripted provider, for code that
     builds its own Guild (the dashboard server, the CLI)."""
-    from guild.providers.router import Router
+    from codeguild.providers.router import Router
 
     real = Router._provider_for
 

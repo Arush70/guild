@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from guild.plan import Plan, Task
-from guild.trace import read_trace
-from guild.workflow import Guild
+from codeguild.plan import Plan, Task
+from codeguild.trace import read_trace
+from codeguild.workflow import Guild
 from tests.conftest import FakeProvider
 
 PLAN = {
@@ -116,7 +116,7 @@ def test_happy_path_accepts_and_documents(project, cfg, profile):
     assert out.accepted and out.rounds == 1 and not out.escalated
     assert "multiply" in (project / "app.py").read_text()
     assert "Has multiply" in (project / "README.md").read_text()
-    assert out.task.status == "done" and out.task.branch.startswith("guild/t1-")
+    assert out.task.status == "done" and out.task.branch.startswith("codeguild/t1-")
     # real tests actually ran in the sandbox, without a model in the loop
     ver_ev = [e for e in read_trace(g.trace.path) if e["kind"] == "verification"]
     assert ver_ev and ver_ev[-1]["passed"] is True and ver_ev[-1]["tests_run"] == 2
@@ -286,7 +286,7 @@ def test_verification_detects_real_failure(project, cfg, profile):
 
 def test_text_tool_calls_are_executed(project, cfg, profile):
     """Small models often write {"name": ..., "arguments": ...} as text. It must still run."""
-    from guild.providers.base import Completion, Message, Usage
+    from codeguild.providers.base import Completion, Message, Usage
 
     class TextToolFake:
         def __init__(self):
@@ -330,7 +330,7 @@ def test_guild_metadata_never_in_commits_or_diff(project, cfg, profile):
     tracked = subprocess.run(
         ["git", "ls-files"], cwd=project, capture_output=True, text=True
     ).stdout
-    assert ".guild" not in tracked
+    assert ".codeguild" not in tracked
 
 
 def test_selected_tasks_continue_after_failure(project, cfg, profile):
@@ -375,7 +375,7 @@ def test_untracked_files_do_not_block_branch_and_stay_uncommitted(project, cfg, 
     g.close()
     import subprocess
 
-    assert out.task.branch and out.task.branch.startswith("guild/")
+    assert out.task.branch and out.task.branch.startswith("codeguild/")
     tracked = subprocess.run(
         ["git", "ls-files"], cwd=project, capture_output=True, text=True
     ).stdout
@@ -442,7 +442,7 @@ def test_merge_and_discard_helpers(project, cfg, profile):
 def test_engineer_done_without_changes_is_pushed_back(project, cfg, profile):
     """A model that writes code as prose and says 'done' gets one more go; if it still changes
     nothing, the task is blocked rather than falsely accepted."""
-    from guild.providers.base import Completion, Message, Usage
+    from codeguild.providers.base import Completion, Message, Usage
 
     class ProseEngineer:
         def __init__(self):
@@ -486,11 +486,11 @@ def test_run_task_records_traceback_on_crash(project, cfg, profile, monkeypatch)
     err = [e for e in read_trace(g.trace.path) if e["kind"] == "error"]
     assert err and "boom" in err[0]["error"]
     assert "Traceback" in err[0]["traceback"] and "TypeError: boom" in err[0]["traceback"]
-    assert plan.tasks[0].status == "todo" and "guild error" in plan.tasks[0].notes
+    assert plan.tasks[0].status == "todo" and "codeguild error" in plan.tasks[0].notes
 
 
 def test_false_block_is_pushed_back_and_recovers(project, cfg, profile):
-    """Engineer says 'blocked: app.py does not exist' → guild pushes back → it creates the file."""
+    """Engineer says 'blocked: app.py does not exist' → codeguild pushes back → it creates the file."""
     (project / "app.py").unlink()  # empty-ish project: the task's file is missing
     eng = [
         {"status": "blocked", "summary": "app.py does not exist"},
@@ -679,7 +679,7 @@ def test_deleting_existing_tests_fails_verification(project, cfg, profile):
 def test_dotfile_read_then_overwrite_counts_as_the_same_file(project, cfg, profile):
     """Regression: `.github/x` and `./.github/x` are one file to the read-before-overwrite
     guard; the leading dot of a dot-folder must not be lost when paths are compared."""
-    from guild.tools import dispatch
+    from codeguild.tools import dispatch
 
     (project / ".github").mkdir()
     (project / ".github" / "ci.yml").write_text("on: push\n")
@@ -754,7 +754,7 @@ def test_commit_keeps_caches_out_and_rejected_task_returns_to_base(project, cfg,
 
     base = git("rev-parse", "--abbrev-ref", "HEAD").strip()
     (project / "__pycache__").mkdir()
-    # accepted task: caches must not be committed; guild stays on the task branch
+    # accepted task: caches must not be committed; codeguild stays on the task branch
     fake = FakeProvider(
         {
             "engineer": ENGINEER_GOOD,
@@ -790,6 +790,6 @@ def test_commit_keeps_caches_out_and_rejected_task_returns_to_base(project, cfg,
     g.close()
     assert not out2.accepted and out2.task.branch
     assert git("rev-parse", "--abbrev-ref", "HEAD").strip() == before
-    assert out2.task.branch in git("branch", "--list", "guild/*")
+    assert out2.task.branch in git("branch", "--list", "codeguild/*")
     assert base  # base branch still exists untouched
     assert git("rev-parse", "--abbrev-ref", "HEAD").strip() != out2.task.branch

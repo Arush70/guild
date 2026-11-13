@@ -1,9 +1,9 @@
-# Product Requirements Document — guild
+# Product Requirements Document — codeguild
 
 ## Product
 
-**guild** — a budget-aware AI engineering team for your codebase. One command (`guild ui` or
-`guild plan` / `guild run`) turns a goal into a plan, implements it task by task on git
+**codeguild** — a budget-aware AI engineering team for your codebase. One command (`codeguild ui` or
+`codeguild plan` / `codeguild run`) turns a goal into a plan, implements it task by task on git
 branches, verifies with real tests, reviews for bugs and security, and hands you a branch to
 merge. Every seat is filled by whatever model your budget allows.
 
@@ -26,7 +26,7 @@ Solo developers and students want an AI team that builds real software, but:
 
 ## Goal
 
-Make a stranger able to `pip install guild-ai`, point it at a repo, and get an accepted,
+Make a stranger able to `pip install codeguild`, point it at a repo, and get an accepted,
 merged branch out of it within 15 minutes — on free local models — with no surprises in
 cost or safety.
 
@@ -65,6 +65,6 @@ cost or safety.
    project, repeatably (3 runs in a row).
 2. The same on `lite` (Claude Lead, local Engineer).
 3. The same on two other small projects (one Python, one non-Python test runner).
-4. `pip install guild-ai` from PyPI works on a clean machine; `guild init` needs no manual
+4. `pip install codeguild` from PyPI works on a clean machine; `codeguild init` needs no manual
    YAML editing on an 8 GB GPU laptop.
 5. No run ever commits to `main`, exceeds its cost cap, or touches files outside the project.

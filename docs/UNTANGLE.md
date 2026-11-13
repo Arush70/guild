@@ -40,8 +40,8 @@ written above the problems it removes. Line numbers refer to the code before the
   - `workflow.py:645-706` (run + parse) and `:771-776,874-890` (baseline and removed-test
     logic) are one concern spread over the class and the middle of the task loop.
 
-- **Every path under `.guild/` and every "guild-owned" directory name lives in `paths.py`.**
-  - `.guild/plan.json` is spelled in `workflow.py:388`, `ui/server.py:301,942`, `cli.py:484`;
+- **Every path under `.codeguild/` and every "codeguild-owned" directory name lives in `paths.py`.**
+  - `.codeguild/plan.json` is spelled in `workflow.py:388`, `ui/server.py:301,942`, `cli.py:484`;
     `runs/*/trace.jsonl` in `workflow.py:228`, `ui/server.py:835,861`, `cli.py:820`;
     `config.yaml` in `config.py:153,162`, `ui/server.py:414,427,967`.
   - The protected directories are listed in `tools/registry.py:82` and again in
@@ -69,7 +69,7 @@ written above the problems it removes. Line numbers refer to the code before the
 
 - **One job runner in the server.** `_job(kind, profile, work)` creates the `Guild`, runs the
   work, closes it.
-  - Six endpoints repeat make-guild / try / finally-close (`ui/server.py:551-558,578-588,
+  - Six endpoints repeat make-codeguild / try / finally-close (`ui/server.py:551-558,578-588,
     618-623,690-698,705-716,723-728`).
   - `chat` and `pair` check `busy()` themselves before `Hub.start` checks it again
     (`:544,568`), so that a refused message is not left in the history.
@@ -125,10 +125,10 @@ problems. Fixed:
 - **A completion carries its own cost and latency** (`Completion.usd`, `.latency_s`), set by
   the router. `agent.py` no longer reaches into the router's tracker for the last call.
 - **Facts about a provider come from its endpoint entry** (`Endpoint.local`, `.key_optional`,
-  `KEY_ENV`): the "$0 means local models only" rule, `guild doctor` and the init wizard no
+  `KEY_ENV`): the "$0 means local models only" rule, `codeguild doctor` and the init wizard no
   longer keep their own lists of provider names.
 - **`projectdocs.py`** is the one table of project documents: where each may live and which
-  template `guild init --docs` writes. The reader and the scaffolder had separate lists.
+  template `codeguild init --docs` writes. The reader and the scaffolder had separate lists.
 - **`hardware.TIERS`** names the tiers once; an unknown tier is an error instead of silently
   becoming `free`.
 - Removed: the router's retry for providers without an `on_token` parameter (all take it), a
@@ -139,7 +139,7 @@ problems. Fixed:
 
 ## Special cases kept (the system still needs them)
 
-- `repo.py`: retry of the commit with a `guild` identity when git has no user.name/email.
+- `repo.py`: retry of the commit with a `codeguild` identity when git has no user.name/email.
 - `paths.py`: short retry of the atomic replace on Windows, where it fails while another
   process has the file open.
 - `workflow.py`: one push-back when the engineer says "blocked", one retry when it reports
@@ -159,22 +159,22 @@ problems. Fixed:
 
 A second independent reviewer compared the old and new code path by path, running the same
 scenarios against both. The safety model came out unchanged ($0 rule, path scoping,
-`.git`/`.guild` protection, secret files, read-only allowlist, approval previews; "commit only
-on a guild branch" is slightly stricter). It found accidental differences, now fixed and pinned
+`.git`/`.codeguild` protection, secret files, read-only allowlist, approval previews; "commit only
+on a codeguild branch" is slightly stricter). It found accidental differences, now fixed and pinned
 by `tests/test_same_behaviour.py`:
 
-- `guild run` printed only the cost table after a rejected task; the outcome panel (tests,
+- `codeguild run` printed only the cost table after a rejected task; the outcome panel (tests,
   critic findings, lead notes) is back.
 - An engineer that twice answered "done" without changing a file lost its last push-back
   attempt.
 - A project's own `engineer.yaml` written before `task_budget` existed lost the profile's
   tool budget. A role file without the line now means "yes for the role named engineer".
-- A task started from a guild branch could get that branch (even its own) as merge target.
+- A task started from a codeguild branch could get that branch (even its own) as merge target.
 - "Approve and remember" on a *command* approval switched on auto-approval of later edits
   (reachable only by calling the API directly).
 - `/api/state` returned an agent's whole message history after an `ask` job.
 - Task results sent to front ends had `reviews: {…}` in place of `critic` / `security` keys.
-- `guild run` said "no runnable tasks left" after the owner declined a task.
+- `codeguild run` said "no runnable tasks left" after the owner declined a task.
 - The Lead saw `not run` / missing blocks where it used to see `null` for a skipped
   verification or reviewer; a timed-out Docker command reported the wrong time limit;
   `search` on a single ignored file returned matches.
@@ -188,21 +188,21 @@ Small, and left as they are:
 - Cancelling a job stops a command running in the Docker sandbox as well. Docker output is
   stdout and stderr interleaved (as the local sandbox always was), not one after the other.
 - The default ignore list also has `.pytest_cache` and `.ruff_cache`.
-- `guild init` on a machine without a git identity makes the initial commit as `guild` and
+- `codeguild init` on a machine without a git identity makes the initial commit as `codeguild` and
   says so, where it used to fail with a hint.
-- `guild ui` in a folder without a config writes the detected test command, as `guild init`
+- `codeguild ui` in a folder without a config writes the detected test command, as `codeguild init`
   does, not always the pytest default.
 - `build_profile` with an unknown tier is an error.
 - Wording: some warnings and HTTP error texts (unknown task, busy server, corrupt plan),
-  `guild doctor` status text. `guild cost --last 0` shows no runs (it showed all).
+  `codeguild doctor` status text. `codeguild cost --last 0` shows no runs (it showed all).
 - Trace: warning notes are worded differently; a failed commit is reported to the owner but
   no longer written as a `note`; the engineer's `decision` event carries the status after a
   push-back; verification events always carry `lint_passed` and `removed_tests`.
-- After `guild run T2` skips T2 for an unmet dependency, it also prints "no runnable tasks
+- After `codeguild run T2` skips T2 for an unmet dependency, it also prints "no runnable tasks
   left".
-- A rejected task returns to its start branch even when only `.guild/` files are modified
-  (matters only if `.guild/plan.json` is tracked in git, which `guild init` prevents).
-- The extension's Stop no longer has a fallback for guild servers older than `/api/cancel`.
+- A rejected task returns to its start branch even when only `.codeguild/` files are modified
+  (matters only if `.codeguild/plan.json` is tracked in git, which `codeguild init` prevents).
+- The extension's Stop no longer has a fallback for codeguild servers older than `/api/cancel`.
 
 ## Tests
 
@@ -210,14 +210,14 @@ Small, and left as they are:
 edits, git (`Repo`, `TaskBranch`), `Verifier`, paths, project documents, provider status and
 `Workspace`. `tests/test_policy.py` holds the command and URL policy tests that used to import
 private names from the tool registry. `tests/test_same_behaviour.py` pins the differences
-listed above. Tests no longer write into the owner's real `~/.guild/recent.json`. Totals: 229
+listed above. Tests no longer write into the owner's real `~/.codeguild/recent.json`. Totals: 229
 Python tests, 22 extension tests.
 
 ## Not changed, and why
 
 - **Model names in three places** (`hardware.py` `build_profile`, `providers/router.py`
   `DEFAULT_PRICES`, `data/profiles/*.yaml`). Deriving the wizard's profile from the packaged
-  YAML would change what `guild init` writes, so it is a product decision, not a refactor.
+  YAML would change what `codeguild init` writes, so it is a product decision, not a refactor.
   The Anthropic ids in those files (`claude-fable-5-1`, `claude-opus-5`, `claude-sonnet-5`,
   `claude-haiku-4-5`) should be checked against the provider's current model list before the
   first `lite` run.

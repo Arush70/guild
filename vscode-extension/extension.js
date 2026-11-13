@@ -1,8 +1,8 @@
 'use strict';
-// Guild for VS Code. Plain CommonJS, no dependencies, no build step.
+// Codeguild for VS Code. Plain CommonJS, no dependencies, no build step.
 //
-// The extension starts `guild ui --no-browser` for the opened folder and drives it through the
-// same HTTP API + event stream the web dashboard uses. guild's core stays Python (ADR-001); this
+// The extension starts `codeguild ui --no-browser` for the opened folder and drives it through the
+// same HTTP API + event stream the web dashboard uses. codeguild's core stays Python (ADR-001); this
 // file is only presentation: a task tree, a chat/activity view, native diff and a status bar item.
 
 const vscode = require('vscode');
@@ -13,7 +13,7 @@ const { GuildClient } = require('./lib/client');
 const server = require('./lib/server');
 const fmt = require('./lib/format');
 
-const SCHEME = 'guild';
+const SCHEME = 'codeguild';
 const enc = encodeURIComponent;
 
 class PlanProvider {
@@ -154,19 +154,19 @@ class Controller {
     this._docsChanged = new vscode.EventEmitter();
     this._refreshTimer = null;
 
-    this.channel = vscode.window.createOutputChannel('Guild');
+    this.channel = vscode.window.createOutputChannel('Codeguild');
     this.plan = new PlanProvider(this);
-    this.tree = vscode.window.createTreeView('guild.plan', { treeDataProvider: this.plan });
+    this.tree = vscode.window.createTreeView('codeguild.plan', { treeDataProvider: this.plan });
     this.chatView = new ChatView(this, context.extensionUri);
     this.bar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
-    this.bar.command = 'workbench.view.extension.guild';
+    this.bar.command = 'workbench.view.extension.codeguild';
     this.bar.show();
 
     context.subscriptions.push(
       this.channel,
       this.tree,
       this.bar,
-      vscode.window.registerWebviewViewProvider('guild.chat', this.chatView, {
+      vscode.window.registerWebviewViewProvider('codeguild.chat', this.chatView, {
         webviewOptions: { retainContextWhenHidden: true },
       }),
       vscode.workspace.registerTextDocumentContentProvider(SCHEME, {
@@ -181,32 +181,32 @@ class Controller {
           Promise.resolve(fn.apply(this, args)).catch((e) => this.fail(e))
         )
       );
-    cmd('guild.start', this.start);
-    cmd('guild.stop', () => this.stop(true));
-    cmd('guild.restart', this.restart);
-    cmd('guild.cancel', this.cancelJob);
-    cmd('guild.init', this.init);
-    cmd('guild.plan', this.newPlan);
-    cmd('guild.revisePlan', this.revisePlan);
-    cmd('guild.runNext', () => this.run({}));
-    cmd('guild.runAll', () => this.run({ all: true }));
-    cmd('guild.refresh', this.refresh);
-    cmd('guild.runTask', (el) => el && this.run({ task_id: el.task.id }));
-    cmd('guild.diffTask', (el) => el && this.diffTask(el.task));
-    cmd('guild.mergeTask', (el) => el && this.mergeTask(el.task));
-    cmd('guild.discardTask', (el) => el && this.discardTask(el.task));
-    cmd('guild.editTask', (el) => el && this.editTask(el.task));
-    cmd('guild.deleteTask', (el) => el && this.deleteTask(el.task));
-    cmd('guild.markTask', (el) => el && this.markTask(el.task));
-    cmd('guild.setProfile', this.setProfile);
-    cmd('guild.doctor', this.doctor);
-    cmd('guild.showRuns', this.showRuns);
-    cmd('guild.showLog', () => this.channel.show(true));
-    cmd('guild.openDashboard', () => this.url && vscode.env.openExternal(vscode.Uri.parse(this.url)));
-    cmd('guild.openSettings', () =>
-      vscode.commands.executeCommand('workbench.action.openSettings', 'guild.command')
+    cmd('codeguild.start', this.start);
+    cmd('codeguild.stop', () => this.stop(true));
+    cmd('codeguild.restart', this.restart);
+    cmd('codeguild.cancel', this.cancelJob);
+    cmd('codeguild.init', this.init);
+    cmd('codeguild.plan', this.newPlan);
+    cmd('codeguild.revisePlan', this.revisePlan);
+    cmd('codeguild.runNext', () => this.run({}));
+    cmd('codeguild.runAll', () => this.run({ all: true }));
+    cmd('codeguild.refresh', this.refresh);
+    cmd('codeguild.runTask', (el) => el && this.run({ task_id: el.task.id }));
+    cmd('codeguild.diffTask', (el) => el && this.diffTask(el.task));
+    cmd('codeguild.mergeTask', (el) => el && this.mergeTask(el.task));
+    cmd('codeguild.discardTask', (el) => el && this.discardTask(el.task));
+    cmd('codeguild.editTask', (el) => el && this.editTask(el.task));
+    cmd('codeguild.deleteTask', (el) => el && this.deleteTask(el.task));
+    cmd('codeguild.markTask', (el) => el && this.markTask(el.task));
+    cmd('codeguild.setProfile', this.setProfile);
+    cmd('codeguild.doctor', this.doctor);
+    cmd('codeguild.showRuns', this.showRuns);
+    cmd('codeguild.showLog', () => this.channel.show(true));
+    cmd('codeguild.openDashboard', () => this.url && vscode.env.openExternal(vscode.Uri.parse(this.url)));
+    cmd('codeguild.openSettings', () =>
+      vscode.commands.executeCommand('workbench.action.openSettings', 'codeguild.command')
     );
-    cmd('guild.clearChat', this.clearChat);
+    cmd('codeguild.clearChat', this.clearChat);
   }
 
   // ------------------------------------------------------------------ lifecycle
@@ -217,7 +217,7 @@ class Controller {
   }
 
   cfg(key) {
-    return vscode.workspace.getConfiguration('guild').get(key);
+    return vscode.workspace.getConfiguration('codeguild').get(key);
   }
 
   profile() {
@@ -233,20 +233,20 @@ class Controller {
   syncContext() {
     const plan = this.state && this.state.plan;
     const set = (key, value) => vscode.commands.executeCommand('setContext', key, value);
-    set('guild.state', this.status);
-    set('guild.hasPlan', Boolean(plan && plan.tasks && plan.tasks.length));
-    set('guild.busy', this.busy);
+    set('codeguild.state', this.status);
+    set('codeguild.hasPlan', Boolean(plan && plan.tasks && plan.tasks.length));
+    set('codeguild.busy', this.busy);
   }
 
   async boot() {
     const ws = this.workspace;
     if (!ws) return this.setStatus('noFolder');
-    const initialised = fs.existsSync(path.join(ws, '.guild', 'config.yaml'));
+    const initialised = fs.existsSync(path.join(ws, '.codeguild', 'config.yaml'));
     if (!initialised) {
       this.setStatus('uninitialised');
-      // `guild init` in the terminal creates the config; start as soon as it appears
+      // `codeguild init` in the terminal creates the config; start as soon as it appears
       const w = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(ws, '.guild/config.yaml')
+        new vscode.RelativePattern(ws, '.codeguild/config.yaml')
       );
       w.onDidCreate(() => {
         if (this.status === 'uninitialised') this.start().catch((e) => this.fail(e));
@@ -292,7 +292,7 @@ class Controller {
       this.client = new GuildClient(srv.url);
       this.client.on('event', (ev, replayed) => this.onEvent(ev, replayed));
       this.client.connectEvents();
-      this.channel.appendLine(`guild is running at ${srv.url}`);
+      this.channel.appendLine(`codeguild is running at ${srv.url}`);
       this.setStatus('running');
       await this.refresh();
       await this.chatView.loadHistory();
@@ -300,11 +300,11 @@ class Controller {
       this.channel.appendLine(String(e.message || e));
       this.setStatus('error');
       const pick = await vscode.window.showErrorMessage(
-        'Guild could not start. Set the path to the guild command in the settings.',
+        'Codeguild could not start. Set the path to the codeguild command in the settings.',
         'Open Settings',
         'Show Log'
       );
-      if (pick === 'Open Settings') vscode.commands.executeCommand('guild.openSettings');
+      if (pick === 'Open Settings') vscode.commands.executeCommand('codeguild.openSettings');
       if (pick === 'Show Log') this.channel.show(true);
     }
   }
@@ -313,8 +313,8 @@ class Controller {
     if (proc !== this.proc) return;
     this.teardown();
     if (!this.stopping) {
-      this.channel.appendLine(`guild server exited (code ${code})`);
-      vscode.window.showWarningMessage('The guild server stopped.', 'Start').then((p) => {
+      this.channel.appendLine(`codeguild server exited (code ${code})`);
+      vscode.window.showWarningMessage('The codeguild server stopped.', 'Start').then((p) => {
         if (p === 'Start') this.start().catch((e) => this.fail(e));
       });
     }
@@ -344,7 +344,7 @@ class Controller {
       this.teardown();
       this.setStatus('stopped');
     }
-    if (announce) this.channel.appendLine('guild server stopped');
+    if (announce) this.channel.appendLine('codeguild server stopped');
   }
 
   async restart() {
@@ -361,10 +361,10 @@ class Controller {
   init() {
     const ws = this.workspace;
     if (!ws) return;
-    const term = vscode.window.createTerminal({ name: 'guild init', cwd: ws });
+    const term = vscode.window.createTerminal({ name: 'codeguild init', cwd: ws });
     term.show();
     const argv = server.splitCommand(this.cfg('command'));
-    const cmd = (argv.length ? argv : ['guild']).map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ');
+    const cmd = (argv.length ? argv : ['codeguild']).map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ');
     term.sendText(`${cmd} init`);
   }
 
@@ -379,12 +379,12 @@ class Controller {
   fail(e) {
     const msg = String((e && e.message) || e).split('\n')[0];
     this.channel.appendLine(`error: ${(e && e.message) || e}`);
-    if (e && e.status === 409) vscode.window.showWarningMessage(`Guild is busy: ${msg}`);
-    else vscode.window.showErrorMessage(`Guild: ${msg}`);
+    if (e && e.status === 409) vscode.window.showWarningMessage(`Codeguild is busy: ${msg}`);
+    else vscode.window.showErrorMessage(`Codeguild: ${msg}`);
   }
 
   need() {
-    if (!this.client) throw new Error('guild is not running — use "Guild: Start"');
+    if (!this.client) throw new Error('codeguild is not running — use "Codeguild: Start"');
     return this.client;
   }
 
@@ -436,8 +436,8 @@ class Controller {
       const cfg = (this.state && this.state.config) || {};
       text = `idle · profile ${this.cfg('profile') || cfg.profile || '?'}`;
     }
-    this.bar.text = running && this.busy ? `$(sync~spin) guild: ${text}` : this.status === 'error' ? '$(warning) guild' : '$(organization) guild';
-    this.bar.tooltip = `Guild — ${text}${this.state ? `\n${this.state.root}` : ''}`;
+    this.bar.text = running && this.busy ? `$(sync~spin) codeguild: ${text}` : this.status === 'error' ? '$(warning) codeguild' : '$(organization) codeguild';
+    this.bar.tooltip = `Codeguild — ${text}${this.state ? `\n${this.state.root}` : ''}`;
     this.chatView.post({ type: 'status', text, busy: running && this.busy, ready: running });
   }
 
@@ -473,7 +473,7 @@ class Controller {
           this.chatView.post({ type: 'message', role: r.model ? `assistant · ${r.model}` : 'assistant', text: (r.text || '') + files, cls: 'assistant' });
         } else if (ev.job === 'plan' || ev.job === 'revise') {
           const n = ev.result && ev.result.tasks ? ev.result.tasks.length : 0;
-          this.notify('info', `Guild: plan ready — ${n} task(s).`);
+          this.notify('info', `Codeguild: plan ready — ${n} task(s).`);
         } else if (ev.job === 'ask') {
           const r = ev.result || {};
           this.showDoc(`ask/${Date.now()}.json`, r.data ? JSON.stringify(r.data, null, 2) : r.raw || '');
@@ -483,9 +483,9 @@ class Controller {
         this.refreshSoon();
         if (replayed) return;
         if (ev.job === 'chat' || ev.job === 'pair') {
-          this.chatView.post({ type: 'message', role: 'guild', text: String(ev.error || 'failed'), cls: 'error' });
+          this.chatView.post({ type: 'message', role: 'codeguild', text: String(ev.error || 'failed'), cls: 'error' });
         }
-        this.notify('error', `Guild: ${ev.job} failed — ${String(ev.error || '').split('\n')[0]}`, 'Show Log').then((p) => {
+        this.notify('error', `Codeguild: ${ev.job} failed — ${String(ev.error || '').split('\n')[0]}`, 'Show Log').then((p) => {
           if (p === 'Show Log') this.channel.show(true);
         });
         return;
@@ -499,7 +499,7 @@ class Controller {
         this.clearApprovals();
         this.refreshSoon();
         if (!replayed && (ev.job === 'chat' || ev.job === 'pair')) {
-          this.chatView.post({ type: 'message', role: 'guild', text: 'Stopped.', cls: 'error' });
+          this.chatView.post({ type: 'message', role: 'codeguild', text: 'Stopped.', cls: 'error' });
         }
         return;
       case 'decision':
@@ -519,12 +519,12 @@ class Controller {
   async announceTask(ev) {
     if (ev.accepted) {
       const actions = ev.branch ? ['Review Changes', 'Merge'] : [];
-      const pick = await this.notify('info', `Guild: ${ev.task_id} accepted after ${ev.rounds} round(s).`, ...actions);
+      const pick = await this.notify('info', `Codeguild: ${ev.task_id} accepted after ${ev.rounds} round(s).`, ...actions);
       const task = this.findTask(ev.task_id) || { id: ev.task_id, branch: ev.branch };
       if (pick === 'Review Changes') this.diffTask(task).catch((e) => this.fail(e));
       if (pick === 'Merge') this.mergeTask(task).catch((e) => this.fail(e));
     } else {
-      const pick = await this.notify('warn', `Guild: ${ev.task_id} was not accepted (${ev.rounds} round(s)).`, 'Show Log');
+      const pick = await this.notify('warn', `Codeguild: ${ev.task_id} was not accepted (${ev.rounds} round(s)).`, 'Show Log');
       if (pick === 'Show Log') this.channel.show(true);
     }
   }
@@ -545,7 +545,7 @@ class Controller {
   async newPlan() {
     this.need();
     const goal = await vscode.window.showInputBox({
-      title: 'Guild: new plan',
+      title: 'Codeguild: new plan',
       prompt: 'What do you want built? The Lead turns this into a roadmap and tasks.',
       placeHolder: 'Add a multiply(a, b) function to app.py and a test for it',
       ignoreFocusOut: true,
@@ -566,7 +566,7 @@ class Controller {
   async revisePlan() {
     this.need();
     const instruction = await vscode.window.showInputBox({
-      title: 'Guild: revise plan',
+      title: 'Codeguild: revise plan',
       prompt: 'Tell the Lead what to change. Finished tasks keep their status.',
       placeHolder: 'Split T2 into two tasks and add input validation',
       ignoreFocusOut: true,
@@ -590,7 +590,7 @@ class Controller {
       this.busy = true;
       this.pushStatus();
     } catch (e) {
-      this.chatView.post({ type: 'message', role: 'guild', text: `not sent: ${e.message}`, cls: 'error' });
+      this.chatView.post({ type: 'message', role: 'codeguild', text: `not sent: ${e.message}`, cls: 'error' });
     }
   }
 
@@ -613,7 +613,7 @@ class Controller {
   async promptApproval(req, offerDiff) {
     const actions = ['Approve', ...(req.kind === 'edit' && offerDiff ? ['Open Diff'] : []), 'Decline'];
     // always shown: unlike "task finished", this one blocks the agent until it is answered
-    const pick = await vscode.window.showInformationMessage(`Guild wants to ${fmt.approvalTitle(req)}`, ...actions);
+    const pick = await vscode.window.showInformationMessage(`Codeguild wants to ${fmt.approvalTitle(req)}`, ...actions);
     if (!this.approvals.has(req.id)) return; // answered in the chat view or cancelled meanwhile
     if (pick === 'Open Diff') {
       await this.openProposedDiff(req);
@@ -654,7 +654,7 @@ class Controller {
     this.docs.set(right.path, typeof req.proposed === 'string' ? req.proposed : `(file too large to preview)\n\n${req.preview}`);
     this._docsChanged.fire(right);
     const left = req.new_file ? empty : vscode.Uri.file(path.join(root, req.path));
-    await vscode.commands.executeCommand('vscode.diff', left, right, `${req.path} (now ↔ proposed by guild)`, { preview: true });
+    await vscode.commands.executeCommand('vscode.diff', left, right, `${req.path} (now ↔ proposed by codeguild)`, { preview: true });
   }
 
   // ------------------------------------------------------------------ plan editing
@@ -670,7 +670,7 @@ class Controller {
     if (title === undefined) return;
     const description = await ask('description', task.description);
     if (description === undefined) return;
-    const done_when = await ask('done when (a check guild can run, e.g. "test_multiply passes")', task.done_when);
+    const done_when = await ask('done when (a check codeguild can run, e.g. "test_multiply passes")', task.done_when);
     if (done_when === undefined) return;
     await this.postTask({ id: task.id, title, description, done_when });
   }
@@ -690,12 +690,12 @@ class Controller {
   async diffTask(task) {
     const d = await this.need().get(`/api/branches/${enc(task.id)}/diff`);
     if (!d.exists) {
-      vscode.window.showInformationMessage(`Guild: branch ${d.branch} no longer exists.`);
+      vscode.window.showInformationMessage(`Codeguild: branch ${d.branch} no longer exists.`);
       return;
     }
     const files = fmt.diffFiles(d.diff);
     if (!files.length) {
-      vscode.window.showInformationMessage(`Guild: ${d.branch} has no changes against ${d.base}.`);
+      vscode.window.showInformationMessage(`Codeguild: ${d.branch} has no changes against ${d.base}.`);
       return;
     }
     const WHOLE = `$(diff) Whole change as one diff (${files.length} file(s))`;
@@ -736,13 +736,13 @@ class Controller {
     const base = task.base || 'the default branch';
     const ok = await vscode.window.showWarningMessage(
       `Merge ${task.branch || task.id} into ${base}?`,
-      { modal: true, detail: 'guild checks out the target branch and merges with --no-ff. It refuses on uncommitted changes or conflicts.' },
+      { modal: true, detail: 'codeguild checks out the target branch and merges with --no-ff. It refuses on uncommitted changes or conflicts.' },
       'Merge'
     );
     if (ok !== 'Merge') return;
     const res = await this.need().post(`/api/branches/${enc(task.id)}/merge`, {});
-    if (res.ok) vscode.window.showInformationMessage(`Guild: merged ${res.merged} into ${res.base}.`);
-    else vscode.window.showErrorMessage(`Guild: merge failed — ${String(res.error || '').split('\n')[0]}`);
+    if (res.ok) vscode.window.showInformationMessage(`Codeguild: merged ${res.merged} into ${res.base}.`);
+    else vscode.window.showErrorMessage(`Codeguild: merge failed — ${String(res.error || '').split('\n')[0]}`);
     if (!res.ok) this.channel.appendLine(`merge failed: ${res.error}`);
     await this.refresh();
   }
@@ -755,7 +755,7 @@ class Controller {
     );
     if (ok !== 'Discard Branch') return;
     const res = await this.need().post(`/api/branches/${enc(task.id)}/discard`, {});
-    if (!res.ok) vscode.window.showErrorMessage(`Guild: ${String(res.output || 'could not delete the branch').split('\n')[0]}`);
+    if (!res.ok) vscode.window.showErrorMessage(`Codeguild: ${String(res.output || 'could not delete the branch').split('\n')[0]}`);
     await this.refresh();
   }
 
@@ -774,7 +774,7 @@ class Controller {
     const current = this.state && this.state.config && this.state.config.profile;
     const pick = await vscode.window.showQuickPick(
       profiles.map((p) => ({ label: p, description: p === current ? 'current' : '' })),
-      { title: 'Guild: profile for this project' }
+      { title: 'Codeguild: profile for this project' }
     );
     if (!pick) return;
     await this.need().post('/api/config', { profile: pick.label });
@@ -792,7 +792,7 @@ class Controller {
   async showRuns() {
     const runs = await this.need().get('/api/runs');
     if (!runs.length) {
-      vscode.window.showInformationMessage('Guild: no runs yet.');
+      vscode.window.showInformationMessage('Codeguild: no runs yet.');
       return;
     }
     const pick = await vscode.window.showQuickPick(
@@ -801,7 +801,7 @@ class Controller {
         description: `${r.profile || '?'} · ${r.calls} calls · ${r.input_tokens + r.output_tokens} tok · $${r.usd}`,
         detail: (r.phases || []).join(' → '),
       })),
-      { title: 'Guild: runs', matchOnDescription: true }
+      { title: 'Codeguild: runs', matchOnDescription: true }
     );
     if (!pick) return;
     const detail = await this.need().get(`/api/runs/${enc(pick.label)}`);

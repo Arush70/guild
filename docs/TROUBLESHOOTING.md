@@ -1,28 +1,33 @@
 # Troubleshooting
 
-**`guild` is not recognised** — the venv isn't active. `.venv\Scripts\Activate.ps1` (Windows)
+**I used this when it was called `guild`** — install `codeguild` and use the `codeguild`
+command. A project's `.guild/` folder is renamed to `.codeguild/` the first time you use it;
+old `guild/…` branches still merge and discard. In VS Code, the setting is now
+`codeguild.command`.
+
+**`codeguild` is not recognised** — the venv isn't active. `.venv\Scripts\Activate.ps1` (Windows)
 or `source .venv/bin/activate`. You should see `(.venv)` in the prompt.
 
 **`doctor` says "ollama not reachable"** — Ollama isn't running. Check the tray icon / `ollama list`.
 If it runs on another machine or port, set `OLLAMA_HOST=http://host:11434`.
 
-**"not pulled — ollama pull X"** — run that command. `guild init` picks models that fit your GPU;
-if a model was recommended that is too slow, edit `.guild/profiles/<name>.yaml`.
+**"not pulled — ollama pull X"** — run that command. `codeguild init` picks models that fit your GPU;
+if a model was recommended that is too slow, edit `.codeguild/profiles/<name>.yaml`.
 
-**Every candidate for slot failed** — nothing in that slot's chain is reachable. `guild doctor`
+**Every candidate for slot failed** — nothing in that slot's chain is reachable. `codeguild doctor`
 shows why per model (missing key, not pulled, unreachable). Fix one of them or add another.
 
-**The engineer "did nothing" / wrote the tool call as text** — guild executes text tool calls
+**The engineer "did nothing" / wrote the tool call as text** — codeguild executes text tool calls
 automatically. If you still see no file changes, check the Activity panel for `refused:` lines
 (a path outside the project, or a read-only role trying to write) and the trace in
-`.guild/runs/<id>/trace.jsonl`.
+`.codeguild/runs/<id>/trace.jsonl`.
 
-**Task not accepted, "TESTS FAILED"** — guild ran your `test_command` and it failed. The
+**Task not accepted, "TESTS FAILED"** — codeguild ran your `test_command` and it failed. The
 failing test names are in the task notes. Either the engineer broke something (it gets
 revision rounds to fix it) or your `test_command` is wrong for this project — check
-`.guild/config.yaml`.
+`.codeguild/config.yaml`.
 
-**"you have uncommitted changes to tracked files; guild will not create a branch"** — commit or
+**"you have uncommitted changes to tracked files; codeguild will not create a branch"** — commit or
 stash first. Guild refuses to commit onto your current branch. Untracked files are fine.
 
 **Lead produces vague tasks ("design X", "document Y")** — the Plan check flags these. Small
@@ -30,24 +35,24 @@ local models do this; edit the task in the dashboard, or put a stronger model fi
 `frontier` slot (a free Groq/Gemini key helps a lot; `lite` uses Claude).
 
 **Local model is slow** — a model that doesn't fit VRAM spills into RAM and runs on the CPU.
-`guild doctor` prints what fits. On 8 GB VRAM stay at 7–8b models.
+`codeguild doctor` prints what fits. On 8 GB VRAM stay at 7–8b models.
 
-**Reply didn't match the JSON contract** — guild asks the model to repair its reply up to twice
+**Reply didn't match the JSON contract** — codeguild asks the model to repair its reply up to twice
 (see `note` events in the trace). If a role keeps failing, its model is too weak for that
 role; move it to a stronger slot.
 
-**Merge conflict from the dashboard** — guild aborts the merge and leaves both branches
-untouched. Merge manually: `git merge guild/t1-...`, resolve, commit.
+**Merge conflict from the dashboard** — codeguild aborts the merge and leaves both branches
+untouched. Merge manually: `git merge codeguild/t1-...`, resolve, commit.
 
 **Windows: `Expand-Archive` / paths with spaces** — quote the path:
 `cd "C:\Machine Learning projects\guild"`.
 
-**"has no known price, so the $N cap cannot be kept"** — the model is hosted and not in guild's
+**"has no known price, so the $N cap cannot be kept"** — the model is hosted and not in codeguild's
 price table, so its cost could not be counted against the profile's cap. Add a line to
-`.guild/prices.yaml`: `provider/model: [input, output]` (USD per 1M tokens), or `0` if it is
+`.codeguild/prices.yaml`: `provider/model: [input, output]` (USD per 1M tokens), or `0` if it is
 free for you.
 
-**"guild process N is already working on this project"** — another guild (a terminal, the
+**"codeguild process N is already working on this project"** — another codeguild (a terminal, the
 dashboard, or the VS Code extension's own server) is planning, running or pairing in the same
 folder. Wait for it or stop it; the lock disappears with that process.
 
@@ -55,16 +60,17 @@ folder. Wait for it or stop it; the lock disappears with that process.
 and none of them executed afterwards. If your whole suite is skipped on this machine on
 purpose, point `test_command` at something that runs.
 
-**`.guild/config.yaml: …` and nothing else** — that file (or a role/profile override) cannot
-be read; the message names the line or field. Fix it or delete it and run `guild init`.
+**`.codeguild/config.yaml: …` and nothing else** — that file (or a role/profile override) cannot
+be read; the message names the line or field. Fix it or delete it and run `codeguild init`.
 
-**"this repository brings its own guild configuration"** — `.guild/config.yaml` (or a role or
-profile file) is committed in this repository, so someone else may have written the commands
-in it. Read it, then run `guild trust` in the folder.
+**"this repository brings its own codeguild configuration"** — `.codeguild/config.yaml` (or a role or
+profile file) is committed in this repository and the folder was not set up with
+`codeguild init` on this computer, so someone else may have written the commands in it. Read
+it, then run `codeguild trust` in the folder (once per folder).
 
 **"search stopped after 20s"** — the regular expression backtracks without end (typically a
 repetition inside a repetition). Simplify the pattern or search a narrower path.
 
-**Costs** — `guild cost` sums *estimates* from list prices in `providers/router.py`. Your
+**Costs** — `codeguild cost` sums *estimates* from list prices in `providers/router.py`. Your
 provider dashboard is the truth. Every profile has `max_usd_per_run`; the free profile is 0
 and refuses paid models even if a key is set.

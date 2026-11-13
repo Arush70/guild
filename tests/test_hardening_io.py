@@ -10,18 +10,18 @@ from types import SimpleNamespace as NS
 import pytest
 from typer.testing import CliRunner
 
-from guild.config import (
+from codeguild.config import (
     ProjectConfig,
     load_profile,
     load_project_config,
     save_project_config,
 )
-from guild.plan import Plan, Task
-from guild.providers.anthropic_provider import _to_anthropic
-from guild.providers.base import Message, ToolCall
-from guild.providers.openai_compat import OpenAICompatProvider
-from guild.tools import ToolContext, dispatch
-from guild.workflow import Guild
+from codeguild.plan import Plan, Task
+from codeguild.providers.anthropic_provider import _to_anthropic
+from codeguild.providers.base import Message, ToolCall
+from codeguild.providers.openai_compat import OpenAICompatProvider
+from codeguild.tools import ToolContext, dispatch
+from codeguild.workflow import Guild
 
 # ------------------------------------------------------------------ anthropic message shape
 
@@ -146,7 +146,7 @@ def test_bad_request_about_a_parameter_is_adapted_not_fatal():
 
 
 def test_unfixable_bad_request_still_fails():
-    from guild.providers.base import ProviderError
+    from codeguild.providers.base import ProviderError
 
     def behaviour(kw):
         raise BadRequestError("context length exceeded")
@@ -177,9 +177,9 @@ def test_agents_cannot_read_dotenv(project):
 
 
 def test_docker_sandbox_mounts_git_and_guild_read_only(project, monkeypatch):
-    from guild import sandbox
+    from codeguild import sandbox
 
-    (project / ".guild").mkdir(exist_ok=True)
+    (project / ".codeguild").mkdir(exist_ok=True)
     seen: dict = {}
 
     real_popen = sandbox.subprocess.Popen
@@ -196,12 +196,12 @@ def test_docker_sandbox_mounts_git_and_guild_read_only(project, monkeypatch):
     assert seen["args"][seen["args"].index("--network") + 1] == "none"
     mounts = [seen["args"][i + 1] for i, a in enumerate(seen["args"]) if a == "-v"]
     assert any(m.endswith(":/work/.git:ro") for m in mounts), mounts
-    assert any(m.endswith(":/work/.guild:ro") for m in mounts), mounts
+    assert any(m.endswith(":/work/.codeguild:ro") for m in mounts), mounts
     assert seen["args"][-3:] == ["sh", "-c", "pytest -q"]
 
 
 def test_unknown_sandbox_kind_is_an_error_not_local(project):
-    from guild.sandbox import make_sandbox
+    from codeguild.sandbox import make_sandbox
 
     with pytest.raises(ValueError):
         make_sandbox(project, "dockr", "python:3.11-slim")
@@ -212,7 +212,7 @@ def test_unknown_sandbox_kind_is_an_error_not_local(project):
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from guild.ui import server  # noqa: E402
+from codeguild.ui import server  # noqa: E402
 
 PLAN_ON_DISK = {
     "goal": "g",
@@ -229,9 +229,11 @@ def ui(project, cfg, profile):
     import yaml
 
     save_project_config(project, cfg)
-    (project / ".guild" / "profiles").mkdir(parents=True, exist_ok=True)
-    (project / ".guild" / "profiles" / "test.yaml").write_text(yaml.safe_dump(profile.model_dump()))
-    (project / ".guild" / "plan.json").write_text(json.dumps(PLAN_ON_DISK))
+    (project / ".codeguild" / "profiles").mkdir(parents=True, exist_ok=True)
+    (project / ".codeguild" / "profiles" / "test.yaml").write_text(
+        yaml.safe_dump(profile.model_dump())
+    )
+    (project / ".codeguild" / "plan.json").write_text(json.dumps(PLAN_ON_DISK))
     return TestClient(server.create_app(project), base_url="http://127.0.0.1:7331")
 
 
@@ -290,7 +292,7 @@ def test_task_edit_validates_and_delete_cleans_dependencies(ui, project):
 
 
 def test_runs_listing_survives_a_trace_being_written(ui, project):
-    run = project / ".guild" / "runs" / "20260101-000000-abcdef"
+    run = project / ".codeguild" / "runs" / "20260101-000000-abcdef"
     run.mkdir(parents=True)
     (run / "trace.jsonl").write_text(
         '{"seq":1,"ts":1.0,"kind":"run_start","profile":"test"}\n'
@@ -306,9 +308,9 @@ def test_runs_listing_survives_a_trace_being_written(ui, project):
 
 
 def test_merge_and_discard_report_errors_instead_of_500(ui, project):
-    plan = json.loads((project / ".guild" / "plan.json").read_text())
+    plan = json.loads((project / ".codeguild" / "plan.json").read_text())
     plan["tasks"][0]["branch"] = "precious"  # hand-edited plan pointing at a normal branch
-    (project / ".guild" / "plan.json").write_text(json.dumps(plan))
+    (project / ".codeguild" / "plan.json").write_text(json.dumps(plan))
     subprocess.run(["git", "branch", "precious"], cwd=project, check=True)
     r = ui.post("/api/branches/T1/discard", json={})
     assert r.status_code == 200 and r.json()["ok"] is False
@@ -324,12 +326,14 @@ def _cli_project(project, cfg, profile):
     import yaml
 
     save_project_config(project, cfg)
-    (project / ".guild" / "profiles").mkdir(parents=True, exist_ok=True)
-    (project / ".guild" / "profiles" / "test.yaml").write_text(yaml.safe_dump(profile.model_dump()))
+    (project / ".codeguild" / "profiles").mkdir(parents=True, exist_ok=True)
+    (project / ".codeguild" / "profiles" / "test.yaml").write_text(
+        yaml.safe_dump(profile.model_dump())
+    )
 
 
 def test_cli_run_unknown_task_id_is_a_clean_error(project, cfg, profile):
-    from guild.cli import app
+    from codeguild.cli import app
 
     _cli_project(project, cfg, profile)
     g = Guild(project, cfg, profile)
@@ -340,29 +344,29 @@ def test_cli_run_unknown_task_id_is_a_clean_error(project, cfg, profile):
     res = CliRunner().invoke(app, ["run", "NOPE", "-C", str(project)])
     assert res.exit_code == 2, res.output
     assert "no task NOPE" in res.output and "Traceback" not in res.output
-    # model text that looks like rich markup must not crash `guild status`
+    # model text that looks like rich markup must not crash `codeguild status`
     res = CliRunner().invoke(app, ["status", "-C", str(project)])
     assert res.exit_code == 0, res.output
     assert "[/oops]" in res.output
 
 
 def test_cli_reports_invalid_config_instead_of_traceback(project, cfg, profile):
-    from guild.cli import app
+    from codeguild.cli import app
 
     _cli_project(project, cfg, profile)
-    (project / ".guild" / "config.yaml").write_text("profile: test\nsandbox: dockr\n")
+    (project / ".codeguild" / "config.yaml").write_text("profile: test\nsandbox: dockr\n")
     res = CliRunner().invoke(app, ["status", "-C", str(project)])
     assert res.exit_code == 2 and "sandbox" in res.output
 
 
 def test_init_keeps_hand_edited_settings(project, monkeypatch):
-    from guild import hardware
-    from guild.cli import app
+    from codeguild import hardware
+    from codeguild.cli import app
 
     monkeypatch.setattr(hardware, "detect", lambda: hardware.Hardware(git=True))
     save_project_config(
         project,
-        ProjectConfig(lint_command="ruff check .", ignore=[".git", ".guild", "data"]),
+        ProjectConfig(lint_command="ruff check .", ignore=[".git", ".codeguild", "data"]),
     )
     res = CliRunner().invoke(app, ["init", str(project), "-y", "--profile", "free"])
     assert res.exit_code == 0, res.output

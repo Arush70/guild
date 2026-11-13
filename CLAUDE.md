@@ -2,7 +2,7 @@
 
 ## Read these first, in this order (do not modify anything until you have)
 
-1. `docs/PRD.md` — what guild is and the v1.0 success criteria
+1. `docs/PRD.md` — what codeguild is and the v1.0 success criteria
 2. `docs/ARCHITECTURE.md` — modules, data flow, architectural rules
 3. `RULES.md` — how to change this repo (lint/tests/safety model/small-model tolerance)
 4. `TASKS.md` — what to do next, in order; one task per session
@@ -14,14 +14,14 @@ Then: state your understanding and the plan for the current TASK before writing 
 After every task: `ruff check src tests && pytest -q`, commit, tick `TASKS.md`, update
 `docs/MEMORY.md` and `CHANGELOG.md`.
 
-## What guild is
+## What codeguild is
 
-A budget-aware multi-agent coding team, run from the CLI (`guild ...`) or a local dashboard
-(`guild ui`). Roles (lead, engineer, critic, security, docs, researcher) are YAML files in
-`src/guild/data/roles/`; a profile (`free` / `lite` / `pro`, in `src/guild/data/profiles/`)
+A budget-aware multi-agent coding team, run from the CLI (`codeguild ...`) or a local dashboard
+(`codeguild ui`). Roles (lead, engineer, critic, security, docs, researcher) are YAML files in
+`src/codeguild/data/roles/`; a profile (`free` / `lite` / `pro`, in `src/codeguild/data/profiles/`)
 maps abstract model slots to a fallback chain of concrete `provider/model` ids.
 
-Workflow per task: Engineer implements on a `guild/<task>` git branch → guild runs the test
+Workflow per task: Engineer implements on a `codeguild/<task>` git branch → codeguild runs the test
 command itself (deterministic, no LLM) → Critic + Security review the diff → Engineer revises
 (bounded rounds; escalates to a stronger model after N failures) → Lead ACCEPT/REVISE/REPLAN →
 Docs updates Markdown. Guild never merges to main by itself; the human clicks merge in the
@@ -33,23 +33,23 @@ shares its JSONL trace discipline with his dissertation project (MACS) but is a 
 ## Layout
 
 ```
-src/guild/
+src/codeguild/
   cli.py              typer commands: init(wizard) doctor plan status run pair review ask cost roles watch ui
   workflow.py         Guild class: plan(), revise_plan(), run_task(), run_tasks() (the only task loop),
                       ask(), chat(), pair() (PairSession: mode + approvals, ADR-016), cancel()
-  plan.py             Task / Plan / PlanStore: everything that reads or changes .guild/plan.json
+  plan.py             Task / Plan / PlanStore: everything that reads or changes .codeguild/plan.json
   repo.py             Repo (every git command) and TaskBranch (git state of one task run)
   verify.py           Verifier → Verification: run tests + lint, detect removed tests
-  paths.py            ProjectPaths: every path under .guild/; PROTECTED_DIRS, CACHE_DIRS; atomic_write_text
-  projectdocs.py      the project documents roles read, and their `guild init --docs` templates
+  paths.py            ProjectPaths: every path under .codeguild/; PROTECTED_DIRS, CACHE_DIRS; atomic_write_text
+  projectdocs.py      the project documents roles read, and their `codeguild init --docs` templates
   errors.py           Cancelled
-  trust.py            approval of .guild configuration that came with a repository (`guild trust`)
+  trust.py            approval of .codeguild configuration that came with a repository (`codeguild trust`)
   agent.py            one role's tool-calling loop; extract_json; extract_text_tool_calls;
                       validates the final reply against schemas.py and asks for repairs (≤2)
   schemas.py          pydantic output contract per role/job (lenient coercions for small models)
   hardware.py         detect GPU/RAM/Ollama/keys; recommend_local(); build_profile(); detect_test_command()
-  config.py           Profile / Role / ProjectConfig models + loaders (.guild/ overrides win)
-  trace.py            JSONL trace writer/reader (.guild/runs/<id>/trace.jsonl)
+  config.py           Profile / Role / ProjectConfig models + loaders (.codeguild/ overrides win)
+  trace.py            JSONL trace writer/reader (.codeguild/runs/<id>/trace.jsonl)
   sandbox.py          LocalSandbox / DockerSandbox; secrets stripped from env
   tools/registry.py   file/search/shell/git/web tools; dispatch() → ToolResult(.ok)
   tools/context.py    Workspace (root scoping + ignore rules), ToolContext (+ a role's permissions)
@@ -60,20 +60,22 @@ src/guild/
                       status (is a model usable: key set / pulled — for doctor, dashboard, init)
   ui/server.py        FastAPI + SSE hub (events + throttled token stream); switchable project (_State);
                       /api/fs folder picker, /api/files + /api/file browser, /api/chat, /api/plan/revise;
-                      branch diff/merge/discard; run detail with per-role cost.  ui/index.html  single-file dashboard, no build step
+                      branch diff/merge/discard; run detail with per-role cost.  ui/index.html  the IDE-style dashboard, one file, no build step;
+                      ui/vendor/monaco  monaco-editor's min/vs, unchanged (do not edit; do not lint)
   data/roles/*.yaml   lead engineer critic security docs researcher performance kaggle assistant(chat, prose)
-  data/templates/*.md PRD/ARCHITECTURE/RULES/TASKS/MEMORY/DECISIONS scaffolds for `guild init --docs`
-  data/profiles/*.yaml free lite pro (guild init writes a machine-specific override into .guild/profiles/)
+  data/templates/*.md PRD/ARCHITECTURE/RULES/TASKS/MEMORY/DECISIONS scaffolds for `codeguild init --docs`
+  data/profiles/*.yaml free lite pro (codeguild init writes a machine-specific override into .codeguild/profiles/)
 vscode-extension/     VS Code front end (ADR-014): extension.js + lib/{client,server,format}.js +
-                      media/ (chat webview). No deps, no build. `npm test` (needs `guild` installed),
+                      media/ (chat webview). No deps, no build. `npm test` (needs `codeguild` installed),
                       `npm run package` → .vsix. Talks only to the dashboard HTTP API.
-tests/                373 tests; FakeProvider in conftest.py scripts model replies, no API calls;
+tests/                381 tests; FakeProvider in conftest.py scripts model replies, no API calls;
                       test_robustness.py (schemas/repair/streaming), test_hardware.py (init wizard),
                       test_hardening*.py (2026-11-12 break-it audit: every test is an attack that worked),
-                      test_pair.py (approval gate, modes, cancel, /api/pair, `guild pair`),
+                      test_pair.py (approval gate, modes, cancel, /api/pair, `codeguild pair`),
                       test_policy.py (command/URL policy), test_modules.py (plan, repo, verify, paths…),
                       test_same_behaviour.py (differences the untangle review caught),
-                      test_hardening3.py (second break-it audit: policy, approval gate, sandbox, …)
+                      test_hardening3.py (second break-it audit: policy, approval gate, sandbox, …),
+                      test_ide.py (editor save, per-file branch diff, vendored Monaco)
 ```
 
 ## Conventions
@@ -83,10 +85,10 @@ tests/                373 tests; FakeProvider in conftest.py scripts model repli
 - `pytest` must pass. Tests never call real APIs — use `FakeProvider` (scripted turns per role)
   or a tiny custom provider class registered with `router.register_provider("fake", obj)`.
 - Keep the safety model intact: tools resolve inside the project root and refuse `..`; no role
-  writes into `.git/` or `.guild/`; an agent may only call tools listed in its role YAML;
+  writes into `.git/` or `.codeguild/`; an agent may only call tools listed in its role YAML;
   agents never read `.env`; the dashboard only answers requests addressed to localhost;
   critic/security/verifier are read-only; docs may only write `*.md`; `*KEY*`/`*TOKEN*`/
-  `*SECRET*` env vars are stripped from subprocesses; `.guild/` is never committed by guild
+  `*SECRET*` env vars are stripped from subprocesses; `.codeguild/` is never committed by codeguild
   and never appears in review diffs; the `free` profile refuses any model with a price > 0.
 - Every role replies with a strict JSON contract (see each YAML). `extract_json` tolerates
   fences/prose; there is one repair retry.
@@ -95,7 +97,7 @@ tests/                373 tests; FakeProvider in conftest.py scripts model repli
 - Plan writes are atomic (`os.replace`). The UI reads plan.json concurrently; `/api/state`
   snapshots job status BEFORE reading files (ordering matters — it was a race).
 - Branch safety: `_commit` is a no-op unless `_start_branch` succeeded; dirty = modified
-  tracked files only; pre-existing untracked files are excluded from guild's commits.
+  tracked files only; pre-existing untracked files are excluded from codeguild's commits.
 - Providers accept `on_token` for streaming; Router passes it through; Hub.token() coalesces.
 - `Guild.project_docs()` feeds a project's PRD/ARCHITECTURE/RULES/TASKS/MEMORY/DECISIONS/DESIGN
   (when present) into every role's context via `project_summary()`. Lead/engineer/docs prompts
@@ -122,21 +124,21 @@ Works end to end with a scripted fake provider (193 tests) and verified in a hea
 the read-before-write / removed-tests guards (TASK-002) and a full code audit (see
 CHANGELOG "Unreleased") landed afterwards and have NOT yet been confirmed on a real run.
 
-First thing to do: re-run the demo (`cd ..\Demo && guild ui`, goal "Add a multiply(a, b)
+First thing to do: re-run the demo (`cd ..\Demo && codeguild ui`, goal "Add a multiply(a, b)
 function to app.py and a test_multiply test in test_app.py") with the guards in place, read
-`.guild/runs/<latest>/trace.jsonl`, then TASK-003 (calculator plan, run all).
+`.codeguild/runs/<latest>/trace.jsonl`, then TASK-003 (calculator plan, run all).
 
 ## Roadmap (owner's priorities)
 
 1. **Get one task accepted end-to-end on the free profile with local models** (run the demo,
    read the trace, tune prompts). Then the same on `lite`. Then on 2 more small projects.
-2. Publish to PyPI as `guild-ai` (wheel builds clean: `python -m build`), tag v1.0.0 once (1) holds.
+2. Publish to PyPI as `codeguild` (wheel builds clean: `python -m build`), tag v1.0.0 once (1) holds.
 3. Parallel engineers on independent tasks (per-task git worktrees).
 4. `ux` / `data-quality` reviewer roles; wire extra reviewers from `roles_enabled` into run_task.
 5. Optional CI job running the loop against a real Ollama.
 6. VS Code extension (the dashboard HTTP API is the integration point).
 Done in 0.2.0: streaming, trace viewer, diff/merge, init wizard, output validation, kaggle +
-performance roles, `guild watch`, GitHub Action, troubleshooting docs.
+performance roles, `codeguild watch`, GitHub Action, troubleshooting docs.
 
 ## Suggested first prompt for a new Claude Code session
 
@@ -151,9 +153,9 @@ performance roles, `guild watch`, GitHub Action, troubleshooting docs.
 .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 ruff check src tests && ruff format --check src tests && pytest -q
-guild --help
-guild doctor -C ..\demo
-guild plan "..." -C ..\demo
-guild run -C ..\demo
-guild ui -C ..\demo --no-browser
+codeguild --help
+codeguild doctor -C ..\demo
+codeguild plan "..." -C ..\demo
+codeguild run -C ..\demo
+codeguild ui -C ..\demo --no-browser
 ```

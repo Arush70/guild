@@ -7,8 +7,8 @@ import pytest
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
-from guild.config import save_project_config
-from guild.ui import server
+from codeguild.config import save_project_config
+from codeguild.ui import server
 from tests.conftest import FakeProvider
 from tests.test_workflow import (
     APPROVE,
@@ -26,8 +26,10 @@ def client(project, cfg, profile, use_models):
     # make the "test" profile resolvable from the project and inject the fake provider
     import yaml
 
-    (project / ".guild" / "profiles").mkdir(parents=True, exist_ok=True)
-    (project / ".guild" / "profiles" / "test.yaml").write_text(yaml.safe_dump(profile.model_dump()))
+    (project / ".codeguild" / "profiles").mkdir(parents=True, exist_ok=True)
+    (project / ".codeguild" / "profiles" / "test.yaml").write_text(
+        yaml.safe_dump(profile.model_dump())
+    )
     fake = FakeProvider(
         {
             "lead": [PLAN, LEAD_ACCEPT],
@@ -56,7 +58,7 @@ def _wait(client, kind, timeout=20):
 
 
 def test_index_and_state(client):
-    assert "guild" in client.get("/").text
+    assert "codeguild" in client.get("/").text
     s = client.get("/api/state").json()
     assert s["config"]["profile"] == "test" and s["plan"] is None and not s["busy"]
     assert "lead" in s["roles"] and "test" in s["profiles"]
@@ -130,7 +132,7 @@ def test_files_and_file_read(client, project):
     d = client.get("/api/files").json()
     paths = {f["path"] for f in d["files"]}
     assert {"app.py", "test_app.py", "README.md"} <= paths and not any(
-        p.startswith(".guild") for p in paths
+        p.startswith(".codeguild") for p in paths
     )
     f = client.get("/api/file", params={"path": "app.py"}).json()
     assert "def add" in f["content"] and not f["binary"]
@@ -152,7 +154,7 @@ def test_project_switch_and_fs(client, project, tmp_path_factory):
 
 
 def test_chat_roundtrip(client, use_models):
-    from guild.providers.base import Completion, Message, Usage
+    from codeguild.providers.base import Completion, Message, Usage
 
     class Talker:
         def complete(self, model_name, messages, tools, max_tokens, temperature, on_token=None):
@@ -187,7 +189,7 @@ def test_chat_roundtrip(client, use_models):
 def test_revise_plan_keeps_done_tasks(client, use_models):
     import json as _json
 
-    from guild.providers.base import Completion, Message, Usage
+    from codeguild.providers.base import Completion, Message, Usage
 
     revised = {
         "roadmap": ["m1"],

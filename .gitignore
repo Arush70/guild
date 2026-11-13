@@ -9,8 +9,8 @@ venv/
 .pytest_cache/
 .ruff_cache/
 
-# guild's own working data — never belongs in THIS repo (run guild from a project folder, not here)
-.guild/
+# codeguild's own working data — never belongs in THIS repo (run codeguild from a project folder, not here)
+.codeguild/
 
 # OS / editor / notebook clutter
 .DS_Store

@@ -1,0 +1,805 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>codeguild</title>
+<link rel="icon" href="data:,">
+<style>
+  /* Workshop palette: ink-blue benches, paper-coloured text, brass for whoever is working. */
+  :root {
+    --ink: #1a2130; --bench: #222b3c; --raised: #2b3650; --line: #364361;
+    --paper: #e7e2d4; --dim: #909bb0; --brass: #cfa64e; --brass-ink: #2a2110;
+    --ok: #62b8a4; --bad: #df6f63; --warn: #d9a441;
+    --ui: Seravek, "Gill Sans Nova", Ubuntu, Calibri, "DejaVu Sans", source-sans-pro, sans-serif;
+    --code: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  }
+  * { box-sizing: border-box }
+  html, body { height: 100%; margin: 0 }
+  body { background: var(--ink); color: var(--paper); font: 14px/1.45 var(--ui); display: grid;
+         grid-template-rows: 40px 1fr 30px; overflow: hidden }
+  button, select, input, textarea { font: inherit; color: inherit }
+  button { background: var(--raised); border: 1px solid var(--line); border-radius: 4px; padding: 3px 10px; cursor: pointer }
+  button:hover { border-color: var(--brass) }
+  button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--brass); outline-offset: 1px }
+  button.primary { background: var(--brass); color: var(--brass-ink); border-color: var(--brass); font-weight: 600 }
+  button.quiet { background: none; border-color: transparent; padding: 2px 6px }
+  button.danger:hover { border-color: var(--bad); color: var(--bad) }
+  button:disabled { opacity: .45; cursor: default }
+  input, textarea, select { background: var(--ink); border: 1px solid var(--line); border-radius: 4px; padding: 4px 7px }
+  textarea { width: 100%; resize: vertical }
+  .dim { color: var(--dim) } .small { font-size: 12px } .code { font-family: var(--code); font-size: 12.5px }
+  .hidden { display: none !important }
+  .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap }
+
+  /* top bar */
+  #top { display: flex; align-items: center; gap: 12px; padding: 0 12px; background: var(--bench); border-bottom: 1px solid var(--line) }
+  #top h1 { font-size: 16px; margin: 0; letter-spacing: .02em; font-weight: 700 }
+  #top h1 b { color: var(--brass); font-weight: 700 }
+  #root { max-width: 38vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+  #job { margin-left: auto }
+  #approvalsBadge { background: var(--brass); color: var(--brass-ink); border-color: var(--brass); font-weight: 600 }
+  body.busy #top { box-shadow: inset 0 -2px 0 var(--brass) }
+
+  /* workbench */
+  #work { display: grid; grid-template-columns: 44px var(--side, 300px) 1fr; min-height: 0 }
+  #rail { background: var(--bench); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; padding-top: 6px; gap: 2px }
+  #rail button { width: 36px; height: 36px; padding: 0; border: 0; background: none; border-left: 2px solid transparent; border-radius: 0; color: var(--dim) }
+  #rail button svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round }
+  #rail button.on { color: var(--paper); border-left-color: var(--brass) }
+  #side { background: var(--bench); border-right: 1px solid var(--line); min-width: 0; display: flex; flex-direction: column; min-height: 0 }
+  #side > section { display: flex; flex-direction: column; min-height: 0; flex: 1; padding: 10px }
+  #side h2 { font-size: 13px; margin: 0 0 8px; font-weight: 600 }
+  .scroll { overflow: auto; min-height: 0; flex: 1 }
+  #main { display: grid; grid-template-rows: 1fr var(--bottom, 260px); min-width: 0; min-height: 0 }
+
+  /* explorer */
+  #tree div { padding: 1px 6px; white-space: nowrap; cursor: pointer; border-radius: 3px; font-size: 13px }
+  #tree div:hover { background: var(--raised) }
+  #tree .dir { color: var(--dim) } #tree .dir::before { content: "▾ " } #tree .dir.shut::before { content: "▸ " }
+  #tree .open { color: var(--brass) }
+
+  /* plan */
+  .task { border: 1px solid var(--line); border-radius: 5px; padding: 6px 8px; margin-bottom: 6px; background: var(--ink) }
+  .task.sel { border-color: var(--brass) }
+  .task .title { cursor: pointer }
+  .pill { font-size: 11px; padding: 0 6px; border-radius: 9px; border: 1px solid var(--line); color: var(--dim) }
+  .pill.done { color: var(--ok); border-color: var(--ok) } .pill.blocked { color: var(--bad); border-color: var(--bad) }
+  .pill.in_progress, .pill.review { color: var(--brass); border-color: var(--brass) }
+  .banner { border: 1px solid var(--warn); color: var(--warn); border-radius: 5px; padding: 6px 8px; margin-bottom: 8px; font-size: 13px }
+
+  /* editor area */
+  #editors { display: grid; grid-template-rows: 32px 1fr; min-height: 0; min-width: 0 }
+  #tabs { display: flex; background: var(--bench); border-bottom: 1px solid var(--line); overflow-x: auto }
+  .tab { display: flex; align-items: center; gap: 6px; padding: 0 6px 0 12px; border-right: 1px solid var(--line); white-space: nowrap; cursor: pointer; color: var(--dim); font-size: 13px }
+  .tab.on { background: var(--ink); color: var(--paper); box-shadow: inset 0 2px 0 var(--brass) }
+  .tab .x { border: 0; background: none; padding: 0 4px; color: inherit; border-radius: 3px }
+  .tab.dirty .name::after { content: " ●"; color: var(--brass) }
+  #panes { position: relative; min-height: 0; min-width: 0 }
+  .pane { position: absolute; inset: 0; display: flex; flex-direction: column; min-height: 0 }
+  .pane .bar { display: flex; gap: 8px; align-items: center; padding: 5px 10px; border-bottom: 1px solid var(--line); background: var(--bench); font-size: 13px; flex-wrap: wrap }
+  .pane .host { flex: 1; min-height: 0; position: relative }
+  .pane .doc { flex: 1; overflow: auto; padding: 16px 20px; max-width: 78ch }
+  .pane .doc.wide { max-width: none }
+  .plain { width: 100%; height: 100%; border: 0; border-radius: 0; resize: none; font: 12.5px/1.5 var(--code); padding: 10px; background: var(--ink); white-space: pre; overflow: auto; margin: 0 }
+  .diff2 { display: grid; grid-template-columns: 1fr 1fr; height: 100% }
+  .diff2 pre { border-right: 1px solid var(--line) }
+  .udiff span { display: block } .udiff .add { color: var(--ok) } .udiff .del { color: var(--bad) } .udiff .hunk { color: var(--brass) }
+  table { border-collapse: collapse; font-size: 13px } td, th { padding: 3px 12px 3px 0; text-align: left; vertical-align: top }
+  th { color: var(--dim); font-weight: 400 }
+  .ev { font-family: var(--code); font-size: 12px; padding: 1px 0 } .ev .t { color: var(--dim) }
+  .okc { color: var(--ok) } .badc { color: var(--bad) } .warnc { color: var(--warn) }
+
+  /* bottom panel */
+  #bottom { border-top: 1px solid var(--line); display: grid; grid-template-rows: 30px 1fr; min-height: 0; background: var(--bench) }
+  #btabs { display: flex; align-items: center; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--line) }
+  #btabs button.tabbtn { border: 0; background: none; border-bottom: 2px solid transparent; border-radius: 0; color: var(--dim); padding: 4px 10px }
+  #btabs button.tabbtn.on { color: var(--paper); border-bottom-color: var(--brass) }
+  #btabs .tools { margin-left: auto }
+  #bottom > div.body { min-height: 0; display: flex; flex-direction: column }
+  #log { font: 12px/1.5 var(--code); padding: 6px 10px; white-space: pre-wrap; word-break: break-word }
+  #log .phase { color: var(--brass) } #log .ok { color: var(--ok) } #log .bad { color: var(--bad) } #log .warn { color: var(--warn) } #log .tool { color: var(--dim) }
+  #live { font: 12px/1.5 var(--code); padding: 4px 10px; border-bottom: 1px solid var(--line); max-height: 5.5em; overflow: auto; white-space: pre-wrap }
+  #live .who { color: var(--brass); margin-right: 8px }
+  #chatLog { padding: 8px 12px }
+  .msg { margin: 0 0 8px; padding: 6px 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; max-width: 90ch }
+  .msg.user { background: var(--raised); margin-left: 40px }
+  .msg.assistant { background: var(--ink); border: 1px solid var(--line) }
+  .msg .meta { display: block; color: var(--dim); font-size: 11px }
+  #chatBox { display: flex; gap: 6px; padding: 6px 8px; border-top: 1px solid var(--line); align-items: flex-end }
+  #chatBox textarea { resize: none }
+
+  /* the bench: who is working */
+  #bench { display: flex; align-items: center; gap: 14px; padding: 0 12px; background: var(--bench); border-top: 1px solid var(--line); font-size: 12px; overflow: hidden; white-space: nowrap }
+  .mate { display: flex; align-items: center; gap: 5px; color: var(--dim) }
+  .mate .mark { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--dim) }
+  .mate.active { color: var(--paper) } .mate.active .mark { background: var(--brass); border-color: var(--brass); box-shadow: 0 0 0 3px rgba(207,166,78,.25) }
+  .mate.done .mark { background: var(--ok); border-color: var(--ok) } .mate.bad .mark { background: var(--bad); border-color: var(--bad) }
+  #cost { margin-left: auto; color: var(--dim) }
+  @media (prefers-reduced-motion: no-preference) { .mate.active .mark { animation: work 1.4s ease-in-out infinite } }
+  @keyframes work { 50% { box-shadow: 0 0 0 5px rgba(207,166,78,.08) } }
+
+  dialog { background: var(--bench); color: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 14px; width: min(640px, 92vw) }
+  dialog::backdrop { background: rgba(10,14,22,.6) }
+  #fsList div { padding: 3px 6px; cursor: pointer; border-radius: 3px } #fsList div:hover { background: var(--raised) }
+  @media (max-width: 760px) { #work { grid-template-columns: 44px 1fr } #main { display: none } body.narrow-main #side { display: none } body.narrow-main #main { display: grid } }
+</style>
+</head>
+<body>
+<header id="top">
+  <h1>code<b>guild</b></h1>
+  <button id="root" class="quiet code small" title="Switch project"></button>
+  <label class="small dim">profile <select id="profile"></select></label>
+  <button id="approvalsBadge" class="hidden"></button>
+  <span id="job" class="small dim"></span>
+  <button id="btnStop" class="danger hidden">Stop</button>
+</header>
+
+<div id="work">
+  <nav id="rail" aria-label="Views">
+    <button data-view="files" title="Files" class="on"><svg viewBox="0 0 24 24"><path d="M4 5h6l2 2h8v12H4z"/></svg></button>
+    <button data-view="plan" title="Plan and tasks"><svg viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h9"/><circle cx="19" cy="18" r="1.5"/></svg></button>
+    <button data-view="runs" title="Runs and cost"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6"/></svg></button>
+    <button data-view="setup" title="Models and settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg></button>
+  </nav>
+
+  <aside id="side">
+    <section id="view-files">
+      <h2>Files</h2>
+      <input id="filter" placeholder="Filter by name" aria-label="Filter files" style="margin-bottom:6px">
+      <div class="scroll" id="tree"></div>
+      <div class="small dim" id="fileCount"></div>
+    </section>
+
+    <section id="view-plan" class="hidden">
+      <h2>Plan</h2>
+      <div class="banner hidden" id="gitWarn">This folder is not a git repository, so codeguild edits files directly: no branches, no diffs to review, no undo. Run <span class="code">git init</span> and commit first.</div>
+      <div class="banner hidden" id="planWarn"></div>
+      <textarea id="goal" rows="2" placeholder="What should the team build? Be concrete: “add CSV export with tests”"></textarea>
+      <details class="small" style="margin:4px 0"><summary class="dim">Add a brief (a spec, a competition description)</summary><textarea id="ctx" rows="4" style="margin-top:4px"></textarea></details>
+      <div class="row" style="margin-bottom:8px">
+        <button class="primary" id="btnPlan">Plan</button>
+        <button id="btnRunNext">Run next task</button>
+        <button id="btnRunAll">Run all</button>
+      </div>
+      <div class="row small dim" style="margin-bottom:8px">
+        <label><input type="checkbox" id="skipSec"> skip security review</label>
+        <label><input type="checkbox" id="skipDocs"> skip docs</label>
+      </div>
+      <div class="scroll" id="tasks"></div>
+      <div class="row" style="margin-top:6px"><input id="reviseQ" placeholder="Change the plan: “split T2 in two”" style="flex:1;min-width:0"><button id="btnRevise">Revise</button></div>
+    </section>
+
+    <section id="view-runs" class="hidden">
+      <h2>Runs</h2>
+      <div class="scroll" id="runs"></div>
+    </section>
+
+    <section id="view-setup" class="hidden">
+      <h2>Models and settings</h2>
+      <div class="scroll">
+        <div class="row" style="margin-bottom:8px"><button id="btnDoctor">Check models</button></div>
+        <div class="small dim" style="margin-bottom:12px">Shows which models of this profile can run right now.</div>
+        <label class="small dim">Test command<input id="cfgTest" style="width:100%;margin-bottom:8px" class="code"></label>
+        <label class="small dim">Where commands run
+          <select id="cfgSandbox" style="width:100%;margin-bottom:8px"><option value="local">on this computer</option><option value="docker">in a Docker container</option></select></label>
+        <div class="small dim">Roles that take part in a task</div>
+        <div id="cfgRoles" class="small" style="margin:4px 0 8px"></div>
+        <button id="btnSaveCfg">Save settings</button>
+      </div>
+    </section>
+  </aside>
+
+  <div id="main">
+    <div id="editors">
+      <div id="tabs" role="tablist"></div>
+      <div id="panes"></div>
+    </div>
+    <div id="bottom">
+      <div id="btabs">
+        <button class="tabbtn on" data-b="activity">Activity</button>
+        <button class="tabbtn" data-b="chat">Chat</button>
+        <span class="tools row small dim">
+          <label id="toolsToggle"><input type="checkbox" id="showTools" checked> tool calls</label>
+          <button id="btnClear" class="quiet small">Clear</button>
+        </span>
+      </div>
+      <div class="body" id="b-activity">
+        <div id="live" class="hidden"><span class="who" id="liveWho"></span><span id="liveText"></span></div>
+        <div class="scroll" id="log"></div>
+      </div>
+      <div class="body hidden" id="b-chat">
+        <div class="scroll" id="chatLog"></div>
+        <div id="chatBox">
+          <select id="chatMode" aria-label="How to send" title="Chat only reads the project. Pair can change files and run commands.">
+            <option value="chat">Chat (reads only)</option>
+            <option value="pair:ask">Pair: ask before each change</option>
+            <option value="pair:auto-edits">Pair: edit freely, ask before commands</option>
+            <option value="pair:plan">Pair: plan only</option>
+          </select>
+          <textarea id="chatQ" rows="2" placeholder="Ask about the code or the plan. Enter sends, Shift+Enter makes a new line."></textarea>
+          <button class="primary" id="btnChat">Send</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer id="bench" aria-label="The team"><span id="team" class="row" style="gap:14px;flex-wrap:nowrap"></span><span id="cost"></span></footer>
+
+<dialog id="picker">
+  <div class="row" style="justify-content:space-between;margin-bottom:8px"><b>Open a project</b><button id="pickClose" class="quiet">Close</button></div>
+  <div id="recent" class="small" style="margin-bottom:8px"></div>
+  <div class="row" style="margin-bottom:6px"><input id="fsPath" class="code" style="flex:1"><button id="fsGo">Go</button><button id="fsUp">Up</button></div>
+  <div id="fsList" class="scroll code small" style="max-height:44vh"></div>
+  <div class="row" style="margin-top:10px;justify-content:flex-end"><button class="primary" id="fsOpen">Open this folder</button></div>
+</dialog>
+
+<script src="/vendor/monaco/vs/loader.js"></script>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// values that should be numbers but come from files and model providers: never markup
+const num = v => typeof v === 'number' && isFinite(v) ? v : esc(v ?? '?');
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+async function api(path, body) {
+  const r = await fetch(path, body ? {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)} : {});
+  if (!r.ok) {
+    let detail = (await r.text()).slice(0, 400);
+    try { detail = JSON.parse(detail).detail || detail; } catch (e) { /* not JSON: show the text */ }
+    const err = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail)); err.status = r.status; throw err;
+  }
+  return r.json();
+}
+// run an action started by the owner; a refusal is shown in the activity log, where they look
+const act = fn => async (...a) => { try { return await fn(...a); } catch (e) { logLine('bad', e.message); showBottom('activity'); } };
+
+let state = null, ROLES = [], mates = {}, shownConfigError = null, selectedTask = null;
+
+/* ---------------------------------------------------------------- editor (Monaco, or plain) */
+let monacoReady = null;
+if (window.require && window.require.config) {
+  monacoReady = new Promise(resolve => {
+    window.require.config({paths: {vs: '/vendor/monaco/vs'}});
+    window.require(['vs/editor/editor.main'], () => {
+      monaco.editor.defineTheme('codeguild', {base: 'vs-dark', inherit: true, rules: [], colors: {
+        'editor.background': '#1a2130', 'editor.foreground': '#e7e2d4', 'editorLineNumber.foreground': '#56627c',
+        'editor.lineHighlightBackground': '#222b3c', 'editorCursor.foreground': '#cfa64e', 'editor.selectionBackground': '#3a4a6e',
+        'diffEditor.insertedTextBackground': '#62b8a433', 'diffEditor.removedTextBackground': '#df6f6333'}});
+      monaco.editor.setTheme('codeguild');
+      resolve(true);
+    }, () => resolve(false));
+  });
+}
+const langFor = path => {
+  if (!window.monaco) return undefined;
+  const ext = '.' + String(path).split('.').pop().toLowerCase(), base = String(path).split('/').pop();
+  const hit = monaco.languages.getLanguages().find(l => (l.extensions || []).includes(ext) || (l.filenames || []).includes(base));
+  return hit ? hit.id : 'plaintext';
+};
+const EDITOR_OPTS = {automaticLayout: true, minimap: {enabled: false}, fontSize: 13, scrollBeyondLastLine: false, renderWhitespace: 'selection'};
+
+// One text editor in `host`. Returns {get, set, onChange, focus, dispose}.
+async function textEditor(host, path, value, readOnly) {
+  if (monacoReady && await monacoReady) {
+    const model = monaco.editor.createModel(value, langFor(path));
+    const ed = monaco.editor.create(host, {...EDITOR_OPTS, model, readOnly});
+    return {get: () => model.getValue(), set: v => model.setValue(v), focus: () => ed.focus(),
+            onChange: fn => model.onDidChangeContent(fn), onSave: fn => ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, fn),
+            dispose: () => { ed.dispose(); model.dispose(); }};
+  }
+  const ta = el('textarea', 'plain'); ta.value = value; ta.readOnly = readOnly; ta.spellcheck = false; host.append(ta);
+  return {get: () => ta.value, set: v => { ta.value = v; }, focus: () => ta.focus(), onChange: fn => ta.addEventListener('input', fn),
+          onSave: fn => ta.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); fn(); } }),
+          dispose: () => ta.remove()};
+}
+// Before and after, side by side.
+async function diffEditor(host, path, before, after) {
+  if (monacoReady && await monacoReady) {
+    const original = monaco.editor.createModel(before ?? '', langFor(path)), modified = monaco.editor.createModel(after ?? '', langFor(path));
+    const ed = monaco.editor.createDiffEditor(host, {...EDITOR_OPTS, readOnly: true, renderSideBySide: host.clientWidth > 700});
+    ed.setModel({original, modified});
+    return {dispose: () => { ed.dispose(); original.dispose(); modified.dispose(); }};
+  }
+  const box = el('div', 'diff2'); box.append(el('pre', 'plain', before ?? '(file does not exist)'), el('pre', 'plain', after ?? '(file is deleted)')); host.append(box);
+  return {dispose: () => box.remove()};
+}
+function unifiedDiff(text) {
+  const pre = el('pre', 'plain udiff');
+  for (const line of String(text || '').split('\n')) {
+    const cls = line.startsWith('@@') ? 'hunk' : line.startsWith('+') && !line.startsWith('+++') ? 'add' : line.startsWith('-') && !line.startsWith('---') ? 'del' : '';
+    pre.append(el('span', cls, line || ' '));
+  }
+  return pre;
+}
+
+/* ---------------------------------------------------------------- tabs */
+const tabs = new Map(); // id -> {id, title, pane, tabEl, dispose, dirty}
+let activeTab = null;
+function openTab(id, title, build, label) {
+  if (tabs.has(id)) return showTab(id);
+  const pane = el('div', 'pane'), tabEl = el('div', 'tab');
+  tabEl.setAttribute('role', 'tab'); tabEl.tabIndex = 0; tabEl.title = title;
+  const name = el('span', 'name', label || title.split('/').pop()), x = el('button', 'x', '×'); x.title = 'Close';
+  tabEl.append(name, x);
+  const tab = {id, title, pane, tabEl, dispose: () => {}, dirty: false, closable: true};
+  tabEl.addEventListener('click', e => { if (e.target === x) closeTab(id); else showTab(id); });
+  tabEl.addEventListener('keydown', e => { if (e.key === 'Enter') showTab(id); });
+  tabs.set(id, tab); $('#tabs').append(tabEl); $('#panes').append(pane);
+  showTab(id);
+  Promise.resolve(build(pane, tab)).catch(e => { pane.replaceChildren(el('div', 'doc badc', e.message)); });
+  return tab;
+}
+function showTab(id) {
+  activeTab = id;
+  for (const t of tabs.values()) { t.pane.classList.toggle('hidden', t.id !== id); t.tabEl.classList.toggle('on', t.id !== id ? false : true); }
+  document.body.classList.add('narrow-main');
+  markOpenFile();
+  return tabs.get(id);
+}
+function closeTab(id, force) {
+  const t = tabs.get(id); if (!t) return;
+  if (t.dirty && !force && !confirm(`${t.title} has changes that are not saved. Close it anyway?`)) return;
+  t.dispose(); t.pane.remove(); t.tabEl.remove(); tabs.delete(id);
+  if (activeTab === id) { const rest = [...tabs.keys()]; rest.length ? showTab(rest[rest.length - 1]) : welcome(); }
+}
+function setDirty(tab, dirty) { tab.dirty = dirty; tab.tabEl.classList.toggle('dirty', dirty); }
+window.addEventListener('beforeunload', e => { if ([...tabs.values()].some(t => t.dirty)) { e.preventDefault(); e.returnValue = ''; } });
+
+function welcome() {
+  openTab('welcome', 'Start here', pane => {
+    const d = el('div', 'doc');
+    d.innerHTML = `<h2 style="margin-top:0">A small team works on this folder</h2>
+      <p>Describe a goal in <b>Plan</b>. The lead splits it into tasks; for each task an engineer writes the change on its own git branch, the tests run, and reviewers read the diff. You decide what gets merged.</p>
+      <p>Open a file from <b>Files</b> to read or edit it. Changes a task made appear under that task as files you can compare before and after.</p>
+      <p><b>Chat</b> at the bottom answers questions about the project. Its pair modes let an agent edit with you; every change is shown here as a diff to approve first.</p>
+      <p class="dim small">Nothing leaves this computer except the requests to the models named in the profile.</p>`;
+    pane.append(d);
+  });
+}
+
+/* ---------------------------------------------------------------- files */
+let allFiles = [], shut = new Set();
+const loadFiles = act(async () => {
+  const d = await api('/api/files'); allFiles = d.files;
+  $('#fileCount').textContent = `${d.files.length} file(s)${d.truncated ? ', list cut at 3000' : ''}`;
+  renderTree();
+});
+function renderTree() {
+  const q = $('#filter').value.trim().toLowerCase(), tree = $('#tree'); tree.replaceChildren();
+  const files = allFiles.filter(f => !q || f.path.toLowerCase().includes(q));
+  const seen = new Set();
+  for (const f of files) {
+    const parts = f.path.split('/');
+    let hiddenBy = false;
+    for (let i = 1; i < parts.length; i++) {
+      const dir = parts.slice(0, i).join('/');
+      if (!seen.has(dir) && !hiddenBy) {
+        seen.add(dir);
+        const d = el('div', 'dir' + (shut.has(dir) && !q ? ' shut' : ''), parts[i - 1]); d.style.paddingLeft = 6 + (i - 1) * 12 + 'px';
+        d.addEventListener('click', () => { shut.has(dir) ? shut.delete(dir) : shut.add(dir); renderTree(); });
+        tree.append(d);
+      }
+      if (shut.has(dir) && !q) hiddenBy = true;
+    }
+    if (hiddenBy) continue;
+    const row = el('div', 'file', parts[parts.length - 1]); row.dataset.path = f.path; row.title = `${f.path} (${typeof f.size === 'number' ? f.size : '?'} bytes)`;
+    row.style.paddingLeft = 6 + (parts.length - 1) * 12 + 'px';
+    row.addEventListener('click', () => openFile(f.path));
+    tree.append(row);
+  }
+  if (!files.length) tree.append(el('div', 'dim', q ? 'No file matches.' : 'This folder has no files yet.'));
+  markOpenFile();
+}
+function markOpenFile() { for (const r of $$('#tree .file')) r.classList.toggle('open', activeTab === 'file:' + r.dataset.path); }
+
+function openFile(path) {
+  openTab('file:' + path, path, async (pane, tab) => {
+    const d = await api('/api/file?path=' + encodeURIComponent(path));
+    if (d.binary || d.too_large) { pane.append(el('div', 'doc dim', d.binary ? 'This is a binary file; there is nothing to show as text.' : 'This file is larger than 2 MB and is not opened here.')); return; }
+    const bar = el('div', 'bar'), host = el('div', 'host'), save = el('button', 'primary', 'Save'), note = el('span', 'dim small');
+    save.disabled = true;
+    bar.append(el('span', 'code', path), save, note); pane.append(bar, host);
+    if (!d.editable) { save.classList.add('hidden'); note.textContent = 'Read-only here (protected folder, or not UTF-8 text).'; }
+    let version = d.version;
+    const ed = await textEditor(host, path, d.content, !d.editable);
+    tab.dispose = ed.dispose;
+    ed.onChange(() => { setDirty(tab, true); save.disabled = false; note.textContent = ''; });
+    const doSave = async () => {
+      if (!tab.dirty) return;
+      try {
+        const r = await api('/api/file', {path, content: ed.get(), version});
+        version = r.version; setDirty(tab, false); save.disabled = true; note.textContent = 'Saved';
+      } catch (e) { note.textContent = e.status === 409 && state && state.busy ? 'Not saved: a job is running. Save again when it has finished.' : 'Not saved: ' + e.message; }
+    };
+    save.addEventListener('click', doSave); ed.onSave(doSave);
+  });
+}
+
+/* ---------------------------------------------------------------- plan and tasks */
+function renderPlan() {
+  const box = $('#tasks'), plan = state.plan; box.replaceChildren();
+  $('#planWarn').classList.toggle('hidden', !(state.plan_warnings || []).length);
+  $('#planWarn').textContent = (state.plan_warnings || []).join(' ');
+  if (!plan || !(plan.tasks || []).length) { box.append(el('div', 'dim', 'No plan yet. Write a goal above and choose Plan.')); return; }
+  if (plan.goal && !$('#goal').value) $('#goal').value = plan.goal;
+  for (const t of plan.tasks) {
+    const card = el('div', 'task' + (t.id === selectedTask ? ' sel' : ''));
+    const head = el('div', 'row'); head.style.flexWrap = 'nowrap';
+    const title = el('span', 'title', `${t.id}  ${t.title}`); title.style.flex = '1'; title.tabIndex = 0;
+    title.addEventListener('click', () => openTask(t.id));
+    title.addEventListener('keydown', e => { if (e.key === 'Enter') openTask(t.id); });
+    head.append(title, el('span', 'pill ' + String(t.status).replace(/[^a-z_]/g, ''), String(t.status).replace('_', ' ') + (t.merged ? ', merged' : '')));
+    const acts = el('div', 'row small'); acts.style.marginTop = '4px';
+    if (t.status !== 'done') acts.append(btn('Run', () => run({task_ids: [t.id]})));
+    if (t.branch && !t.merged) acts.append(btn('Changes', () => openTask(t.id)), btn('Merge', () => mergeTask(t.id)), btn('Discard', () => discardTask(t.id), 'danger'));
+    if ((t.depends_on || []).length) acts.append(el('span', 'dim', 'after ' + t.depends_on.join(', ')));
+    card.append(head, acts); box.append(card);
+  }
+}
+const btn = (label, fn, cls) => { const b = el('button', cls || '', label); b.addEventListener('click', act(fn)); return b; };
+const skips = () => [...($('#skipSec').checked ? ['security'] : []), ...($('#skipDocs').checked ? ['docs'] : [])];
+const run = body => api('/api/run', {...body, skip: skips(), profile: $('#profile').value}).then(() => showBottom('activity'));
+const mergeTask = async id => {
+  if (!confirm(`Merge the branch of ${id} into its base branch?`)) return;
+  const r = await api(`/api/branches/${encodeURIComponent(id)}/merge`, {});
+  logLine(r.ok ? 'ok' : 'bad', r.ok ? `merged ${r.merged} into ${r.base}` : `merge failed: ${r.error}`); showBottom('activity'); refresh(); loadFiles();
+};
+const discardTask = async id => {
+  if (!confirm(`Delete the branch of ${id}? Its commits are lost.`)) return;
+  const r = await api(`/api/branches/${encodeURIComponent(id)}/discard`, {});
+  logLine(r.ok ? 'ok' : 'bad', r.ok ? `branch of ${id} deleted` : `not deleted: ${r.output}`); closeTab('task:' + id, true); refresh();
+};
+
+function openTask(id) {
+  selectedTask = id; renderPlan(); closeTab('task:' + id, true);
+  openTab('task:' + id, `Task ${id}`, async pane => {
+    const t = (state.plan.tasks || []).find(x => x.id === id); if (!t) throw new Error(`Task ${id} is no longer in the plan.`);
+    const doc = el('div', 'doc wide'), form = el('div'); form.style.maxWidth = '78ch';
+    const field = (label, key, rows) => {
+      const wrap = el('label', 'small dim', label), input = rows ? el('textarea') : el('input');
+      if (rows) input.rows = rows; else input.style.width = '100%';
+      input.value = Array.isArray(t[key]) ? t[key].join(', ') : (t[key] ?? ''); input.dataset.key = key; input.style.marginBottom = '8px';
+      wrap.append(input); form.append(wrap); return input;
+    };
+    field('Title', 'title'); field('What to build', 'description', 5); field('Done when (something the tests can show)', 'done_when', 2);
+    field('Only after these tasks', 'depends_on'); field('Files it will probably touch', 'files');
+    const status = el('select'); for (const s of ['todo', 'in_progress', 'review', 'done', 'blocked']) { const o = new Option(s.replace('_', ' '), s); status.append(o); }
+    status.value = t.status;
+    const actions = el('div', 'row');
+    actions.append(el('span', 'small dim', 'Status'), status, btn('Save task', async () => {
+      const body = {id, status: status.value};
+      for (const i of form.querySelectorAll('[data-key]')) body[i.dataset.key] = ['depends_on', 'files'].includes(i.dataset.key) ? i.value.split(',').map(s => s.trim()).filter(Boolean) : i.value;
+      await api('/api/plan/task', body); logLine('ok', `task ${id} saved`); refresh();
+    }, 'primary'), btn('Delete task', async () => {
+      if (!confirm(`Delete task ${id} from the plan?`)) return;
+      await api('/api/plan/task', {id, delete: true}); closeTab('task:' + id, true); refresh();
+    }, 'danger'));
+    form.append(actions);
+    if (t.notes) { const n = el('p', 'small'); n.textContent = 'Notes from the last run: ' + t.notes; form.append(n); }
+    doc.append(form); pane.append(doc);
+    if (!t.branch) return;
+    const changes = el('div'); changes.style.marginTop = '18px'; doc.append(changes);
+    const d = await api(`/api/branches/${encodeURIComponent(id)}/files`);
+    changes.append(el('h3', '', `Changes on ${d.branch}`));
+    if (!d.files.length) { changes.append(el('div', 'dim', t.merged ? 'Merged: nothing differs from the base branch any more.' : 'This branch has no changes against its base.')); return; }
+    const names = {A: 'added', M: 'changed', D: 'deleted', R: 'renamed', C: 'copied'};
+    for (const f of d.files) {
+      const row = el('div', 'row code'); row.style.cursor = 'pointer'; row.tabIndex = 0;
+      row.append(el('span', f.status === 'D' ? 'badc' : f.status === 'A' ? 'okc' : 'warnc', names[f.status] || f.status), el('span', '', f.path));
+      const open = () => openBranchFile(id, f.path);
+      row.addEventListener('click', open); row.addEventListener('keydown', e => { if (e.key === 'Enter') open(); });
+      changes.append(row);
+    }
+    changes.append(btn('Show everything as one diff', async () => {
+      const full = await api(`/api/branches/${encodeURIComponent(id)}/diff`);
+      openTab('alldiff:' + id, `${id} full diff`, p => { const h = el('div', 'host'); h.append(unifiedDiff((full.commits ? full.commits + '\n\n' : '') + full.diff)); p.append(h); });
+    }));
+  });
+}
+function openBranchFile(id, path) {
+  openTab(`diff:${id}:${path}`, `${path}, changed by ${id}`, async (pane, tab) => {
+    const d = await api(`/api/branches/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}`);
+    const bar = el('div', 'bar'), host = el('div', 'host');
+    bar.append(el('span', 'code', path), el('span', 'dim small', 'left: before the task    right: after'));
+    pane.append(bar, host);
+    tab.dispose = (await diffEditor(host, path, d.old, d.new)).dispose;
+  }, `${path.split('/').pop()} (${id})`);
+}
+
+/* ---------------------------------------------------------------- approvals (pair mode) */
+const pending = new Map();
+function showApproval(req) {
+  pending.set(req.id, req); badge();
+  const what = req.kind === 'command' ? 'Run a command' : `${req.new_file ? 'Create' : 'Change'} ${req.path}`;
+  const label = 'Approve ' + (req.kind === 'command' ? 'command' : String(req.path).split('/').pop());
+  openTab('approval:' + req.id, what, async (pane, tab) => {
+    tab.closable = false;
+    const bar = el('div', 'bar'), host = el('div', 'host'), why = el('input'); why.placeholder = 'If you reject: tell the agent why (optional)'; why.style.flex = '1'; why.style.minWidth = '160px';
+    const answer = (approve, remember) => act(async () => {
+      await api('/api/approve/' + encodeURIComponent(req.id), {approve, remember: Boolean(remember), reason: why.value});
+      resolved(req.id);
+    })();
+    bar.append(el('b', '', what));
+    const yes = el('button', 'primary', req.kind === 'command' ? 'Run it' : 'Apply'); yes.addEventListener('click', () => answer(true));
+    bar.append(yes);
+    if (req.kind === 'edit') { const all = el('button', '', 'Apply this and the rest of this turn’s edits'); all.addEventListener('click', () => answer(true, true)); bar.append(all); }
+    const no = el('button', 'danger', 'Reject'); no.addEventListener('click', () => answer(false));
+    bar.append(no, why); pane.append(bar, host);
+    if (req.kind === 'command') { host.append(el('pre', 'plain', req.command)); return; }
+    if (typeof req.proposed === 'string') {
+      let before = null;
+      if (!req.new_file) { try { before = (await api('/api/file?path=' + encodeURIComponent(req.path))).content; } catch (e) { before = null; } }
+      tab.dispose = (await diffEditor(host, req.path, before, req.proposed)).dispose;
+    } else host.append(unifiedDiff(req.preview));
+  }, label);
+}
+function resolved(id) { pending.delete(id); closeTab('approval:' + id, true); badge(); }
+function badge() {
+  const b = $('#approvalsBadge'); b.classList.toggle('hidden', !pending.size);
+  b.textContent = pending.size === 1 ? '1 change waits for you' : `${pending.size} changes wait for you`;
+}
+$('#approvalsBadge').addEventListener('click', () => { const first = pending.keys().next().value; if (first) showTab('approval:' + first); });
+
+/* ---------------------------------------------------------------- runs, doctor, settings */
+const loadRuns = act(async () => {
+  const runs = await api('/api/runs'), box = $('#runs'); box.replaceChildren();
+  const total = runs.reduce((a, r) => a + (typeof r.usd === 'number' ? r.usd : 0), 0);
+  $('#cost').textContent = runs.length ? `${runs.length} run(s), $${total.toFixed(4)} estimated` : '';
+  if (!runs.length) box.append(el('div', 'dim', 'No runs yet. Each plan, task or chat turn is recorded here with its cost.'));
+  for (const r of runs) {
+    const row = el('div', 'task'); row.style.cursor = 'pointer'; row.tabIndex = 0;
+    row.append(el('div', 'code small', r.id), el('div', 'small dim', `${r.profile}: ${typeof r.calls === 'number' ? r.calls : '?'} calls, $${typeof r.usd === 'number' ? r.usd : '?'}`));
+    const open = () => openRun(r.id); row.addEventListener('click', open); row.addEventListener('keydown', e => { if (e.key === 'Enter') open(); });
+    box.append(row);
+  }
+});
+function openRun(id) {
+  openTab('run:' + id, 'Run ' + String(id).slice(0, 15), async pane => {
+    const d = await api('/api/runs/' + encodeURIComponent(id)), doc = el('div', 'doc wide');
+    const rows = Object.entries(d.by_role || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${num(v.calls)}</td><td>${num(v.input_tokens)}</td><td>${num(v.output_tokens)}</td><td>${num(v.latency_s)}s</td><td>$${num(v.usd)}</td><td class="code">${esc((v.models || []).join(', '))}</td></tr>`).join('');
+    doc.innerHTML = `<table><tr><th>role</th><th>calls</th><th>tokens in</th><th>tokens out</th><th>time</th><th>cost</th><th>models</th></tr>${rows}</table><h3>What happened</h3>`;
+    const t0 = typeof d.started === 'number' ? d.started : 0;
+    for (const e of d.events || []) {
+      const line = eventText(e); if (!line) continue;
+      const row = el('div', 'ev ' + (line.cls ? line.cls + 'c' : ''));
+      row.append(el('span', 't', (typeof e.ts === 'number' ? (e.ts - t0).toFixed(1) : '?').padStart(7) + 's  '), document.createTextNode(line.text));
+      doc.append(row);
+    }
+    pane.append(doc);
+  });
+}
+const doctor = act(async () => {
+  closeTab('models', true);
+  openTab('models', 'Models', async pane => {
+    const d = await api('/api/doctor?profile=' + encodeURIComponent($('#profile').value)), doc = el('div', 'doc wide');
+    const cap = d.profile.limits.max_usd_per_run;
+    doc.append(el('p', '', `${d.profile.description || ''} Spending cap per run: ${typeof cap === 'number' ? '$' + cap : 'none'}.`));
+    const table = el('table'), head = el('tr'); head.append(el('th', '', 'used for'), el('th', '', 'model'), el('th', '', 'right now')); table.append(head);
+    for (const r of d.rows) { const tr = el('tr'); tr.append(el('td', 'dim', r.slot), el('td', 'code', r.model), el('td', r.ok ? 'okc' : 'badc', r.status)); table.append(tr); }
+    doc.append(table, el('p', 'dim small', 'For each use, codeguild tries the models from top to bottom and takes the first that answers.'));
+    if (!d.git) doc.append(el('p', 'warnc', 'git is not installed, or this folder is not a repository.'));
+    pane.append(doc);
+  });
+});
+function renderSetup() {
+  const c = state.config;
+  if (document.activeElement !== $('#cfgTest')) $('#cfgTest').value = c.test_command || '';
+  $('#cfgSandbox').value = c.sandbox || 'local';
+  const box = $('#cfgRoles'); if (box.dataset.for === ROLES.join()) return;
+  box.dataset.for = ROLES.join(); box.replaceChildren();
+  for (const r of ['engineer', 'verifier', 'critic', 'security', 'lead', 'docs']) {
+    const l = el('label'); l.style.display = 'block'; const cb = el('input'); cb.type = 'checkbox'; cb.value = r; cb.checked = (c.roles_enabled || []).includes(r);
+    l.append(cb, ' ' + r); box.append(l);
+  }
+}
+$('#btnSaveCfg').addEventListener('click', act(async () => {
+  await api('/api/config', {test_command: $('#cfgTest').value, sandbox: $('#cfgSandbox').value, roles_enabled: $$('#cfgRoles input:checked').map(i => i.value)});
+  logLine('ok', 'settings saved'); refresh();
+}));
+
+/* ---------------------------------------------------------------- activity log */
+function logLine(cls, text) {
+  const log = $('#log'), stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+  const row = el('div', cls, `${new Date().toLocaleTimeString()}  ${text}`);
+  if (cls === 'tool' && !$('#showTools').checked) row.classList.add('hidden');
+  log.append(row); while (log.childElementCount > 2000) log.firstElementChild.remove();
+  if (stick) log.scrollTop = log.scrollHeight;
+}
+const one = (s, n = 160) => { const t = String(s ?? '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+// One line for an event, with what it means: {text, cls} or null.
+function eventText(ev) {
+  switch (ev.kind) {
+    case 'phase': return {cls: 'phase', text: `▶ ${ev.phase}${ev.task_id ? ' ' + ev.task_id : ''}${ev.round ? ' (round ' + ev.round + ')' : ''}`};
+    case 'model_call': return {cls: '', text: `  ${ev.role}: ${ev.model}, ${ev.input_tokens}→${ev.output_tokens} tokens, ${ev.latency_s}s${ev.usd ? ', $' + ev.usd : ''}${ev.n_tool_calls ? ', ' + ev.n_tool_calls + ' tool call(s)' : ''}`};
+    case 'tool_call': return {cls: ev.ok === false ? 'bad' : 'tool', text: `    ${ev.role} ${ev.tool}(${one(JSON.stringify(ev.args || {}), 90)}) → ${one(ev.result_preview, 110)}`};
+    case 'verification': return {cls: ev.passed ? 'ok' : 'bad', text: `  tests ${ev.passed ? 'pass' : 'FAIL'} (${ev.tests_run} run)${Array.isArray(ev.failures) && ev.failures.length ? ': ' + one(ev.failures.slice(0, 3).join('; '), 220) : ''}`};
+    case 'review_input': return {cls: '', text: `  reviewers read ${ev.diff_chars} characters of diff: ${(ev.files_in_diff || []).join(', ') || 'no files'}`};
+    case 'decision': return {cls: '', text: `  ${ev.role}: ${ev.decision || ev.status || ''} ${one(ev.notes || ev.summary || '')}`};
+    case 'fallback': return {cls: 'warn', text: `! ${ev.model} failed (${one(ev.reason)}), trying the next model`};
+    case 'note': return {cls: '', text: `  ${ev.role || 'codeguild'}: ${one(ev.msg, 300)}`};
+    case 'report': return ev.level === 'phase' || ev.level === 'fallback' ? null : {cls: ev.level === 'warn' ? 'warn' : '', text: one(ev.msg, 400)};
+    case 'task_end': return {cls: ev.accepted ? 'ok' : 'bad', text: `${ev.accepted ? '✔' : '✖'} task ${ev.task_id} ${ev.accepted ? 'accepted' : 'not accepted'} after ${ev.rounds} round(s), $${ev.cost_usd}${ev.branch ? ', branch ' + ev.branch : ''}`};
+    case 'error': return {cls: 'bad', text: `✖ ${ev.task_id ? ev.task_id + ': ' : ''}${one(ev.error, 400)}`};
+    case 'run_end': return {cls: '', text: `■ run finished, $${ev.total_usd}`};
+    case 'approval': return {cls: ev.approved ? '' : 'warn', text: `  ${ev.approved ? 'approved' : 'declined'}${ev.auto ? ' (automatic)' : ''}: ${ev.tool} ${one(ev.target, 120)}`};
+    default: return null;
+  }
+}
+let liveRole = null;
+function liveAppend(role, text) {
+  if (role !== liveRole) { $('#liveText').textContent = ''; liveRole = role; $('#liveWho').textContent = role; }
+  $('#live').classList.remove('hidden'); $('#liveText').textContent = ($('#liveText').textContent + text).slice(-1200); $('#live').scrollTop = $('#live').scrollHeight;
+}
+function liveClear() { $('#live').classList.add('hidden'); $('#liveText').textContent = ''; liveRole = null; }
+$('#btnClear').addEventListener('click', () => $('#log').replaceChildren());
+$('#showTools').addEventListener('change', e => { for (const r of $$('#log .tool')) r.classList.toggle('hidden', !e.target.checked); });
+
+/* ---------------------------------------------------------------- the bench */
+function renderTeam() {
+  const box = $('#team'); box.replaceChildren();
+  for (const r of ROLES) {
+    const s = mates[r] || {}, m = el('span', 'mate ' + String(s.state || '').replace(/[^a-z]/g, ''));
+    m.title = s.state === 'active' ? `${r} is working` : s.calls ? `${r}: ${s.calls} model call(s) since this page opened` : r;
+    m.append(el('span', 'mark'), el('span', '', r + (s.calls ? ` ${s.calls}` : '')));
+    box.append(m);
+  }
+}
+function setMate(role, patch) { if (!role) return; mates[role] = {...(mates[role] || {}), ...patch}; renderTeam(); }
+function settle(to) { for (const r of Object.keys(mates)) if (mates[r].state === 'active') mates[r].state = to; renderTeam(); }
+
+/* ---------------------------------------------------------------- chat and pair */
+function chatMessage(m) {
+  const d = el('div', 'msg ' + (m.role === 'user' ? 'user' : 'assistant'), m.content);
+  if (m.model || m.mode) d.prepend(el('span', 'meta', [m.mode, m.model].filter(Boolean).join(', ')));
+  return d;
+}
+const loadChat = act(async () => {
+  const log = $('#chatLog'); log.replaceChildren(...(await api('/api/chat')).map(chatMessage));
+  if (!log.childElementCount) log.append(el('div', 'dim', 'Ask how something works, what a task changed, or what to do next.'));
+  log.scrollTop = log.scrollHeight;
+});
+const sendChat = act(async () => {
+  const q = $('#chatQ').value.trim(); if (!q) return;
+  const mode = $('#chatMode').value, profile = $('#profile').value;
+  if (mode.startsWith('ask:')) await api('/api/ask', {role: mode.slice(4), question: q, profile});
+  else if (mode.startsWith('pair:')) await api('/api/pair', {message: q, mode: mode.slice(5), profile});
+  else await api('/api/chat', {message: q, profile});
+  $('#chatQ').value = '';
+  $('#chatLog').append(chatMessage({role: 'user', content: q, mode: mode === 'chat' ? '' : mode.replace(':', ' ')})); $('#chatLog').scrollTop = 1e9;
+});
+$('#btnChat').addEventListener('click', sendChat);
+$('#chatQ').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });
+
+/* ---------------------------------------------------------------- state */
+async function refresh() {
+  state = await api('/api/state');
+  $('#root').textContent = state.root;
+  if (state.config_error && state.config_error !== shownConfigError) { logLine('bad', state.config_error); showBottom('activity'); }
+  shownConfigError = state.config_error;
+  if (ROLES.join() !== state.roles.join()) {
+    ROLES = state.roles; renderTeam();
+    const sel = $('#chatMode'); for (const o of [...sel.options]) if (o.value.startsWith('ask:')) o.remove();
+    for (const r of ROLES) sel.append(new Option(`Ask the ${r}`, 'ask:' + r));
+  }
+  const sel = $('#profile');
+  if (sel.options.length !== state.profiles.length) { sel.replaceChildren(...state.profiles.map(p => new Option(p, p))); }
+  if (document.activeElement !== sel) sel.value = state.config.profile;
+  document.body.classList.toggle('busy', Boolean(state.busy));
+  $('#btnStop').classList.toggle('hidden', !state.busy);
+  $('#job').textContent = state.busy && state.job ? `${state.job.kind} is running` : state.job && state.job.status === 'error' ? 'the last job failed, see Activity' : '';
+  for (const b of [$('#btnPlan'), $('#btnRunNext'), $('#btnRunAll'), $('#btnRevise'), $('#btnChat')]) b.disabled = Boolean(state.busy);
+  renderPlan(); renderSetup();
+  const ids = new Set((state.pending_approvals || []).map(r => r.id));
+  for (const r of state.pending_approvals || []) if (!pending.has(r.id)) showApproval(r);
+  for (const id of [...pending.keys()]) if (!ids.has(id)) resolved(id);
+}
+$('#profile').addEventListener('change', act(async e => { await api('/api/config', {profile: e.target.value}); refresh(); }));
+$('#btnStop').addEventListener('click', act(async () => { await api('/api/cancel', {}); logLine('warn', 'stopping…'); }));
+$('#btnPlan').addEventListener('click', act(async () => {
+  const goal = $('#goal').value.trim(); if (!goal) { $('#goal').focus(); return; }
+  if (state.plan && (state.plan.tasks || []).some(t => t.status !== 'todo') && !confirm('Replace the current plan? Tasks that are done keep their state when the new plan uses the same ids.')) return;
+  await api('/api/plan', {goal, context: $('#ctx').value, profile: $('#profile').value}); showBottom('activity');
+}));
+$('#btnRunNext').addEventListener('click', act(() => run({})));
+$('#btnRunAll').addEventListener('click', act(() => run({all: true})));
+$('#btnRevise').addEventListener('click', act(async () => {
+  const instruction = $('#reviseQ').value.trim(); if (!instruction) return;
+  await api('/api/plan/revise', {instruction, profile: $('#profile').value}); $('#reviseQ').value = ''; showBottom('activity');
+}));
+$('#btnDoctor').addEventListener('click', doctor);
+$('#filter').addEventListener('input', renderTree);
+
+/* ---------------------------------------------------------------- events from the server */
+function onEvent(ev) {
+  switch (ev.kind) {
+    case 'token':
+      if (ev.role === 'assistant' || ev.role === 'pair') {
+        let d = $('#chatLog .msg.streaming');
+        if (!d) { d = el('div', 'msg assistant streaming'); $('#chatLog').append(d); }
+        d.textContent += ev.text; $('#chatLog').scrollTop = 1e9; return;
+      }
+      liveAppend(ev.role, ev.text); return;
+    case 'phase': liveClear(); settle('done'); setMate(ev.role, {state: 'active'}); break;
+    case 'model_call': setMate(ev.role, {calls: ((mates[ev.role] || {}).calls || 0) + 1}); break;
+    case 'approval_request': showApproval(ev.request); showBottom('chat'); return;
+    case 'approval_resolved': resolved(ev.id); return;
+    case 'project_switched': return;
+    case 'job_done':
+      liveClear(); settle('done');
+      if (ev.job === 'ask' && ev.result) $('#chatLog').append(chatMessage({role: 'assistant', content: typeof ev.result.data === 'object' && ev.result.data ? JSON.stringify(ev.result.data, null, 2) : String(ev.result.raw ?? ''), model: ev.result.model, mode: ev.result.role}));
+      if (ev.job === 'chat' || ev.job === 'pair') loadChat();
+      logLine('ok', `${ev.job} finished`); refresh(); loadRuns(); if (ev.job !== 'chat' && ev.job !== 'ask') loadFiles(); return;
+    case 'job_cancelled':
+      liveClear(); settle('bad'); for (const id of [...pending.keys()]) resolved(id);
+      logLine('warn', `${ev.job} stopped`); loadChat(); refresh(); loadRuns(); return;
+    case 'job_error':
+      liveClear(); settle('bad'); logLine('bad', `${ev.job} failed: ${ev.error}${ev.traceback ? '\n' + ev.traceback : ''}`); showBottom('activity'); refresh(); loadRuns(); return;
+    case 'task_end': refresh(); break;
+  }
+  const line = eventText(ev); if (line) logLine(line.cls, line.text);
+}
+function connect() {
+  const es = new EventSource('/api/events'); let first = true; const opened = Date.now() / 1000;
+  es.onmessage = e => {
+    try {
+      const ev = JSON.parse(e.data);
+      // the server replays recent history to a new reader: show it, but do not act on it again
+      if (typeof ev.ts === 'number' && ev.ts < opened - 2 && ['approval_request', 'approval_resolved', 'job_done', 'job_error', 'job_cancelled', 'token'].includes(ev.kind)) return;
+      onEvent(ev);
+    } catch (err) { console.error('codeguild: event not handled', err); }
+  };
+  es.onopen = () => { if (!first) refresh().catch(() => {}); first = false; };
+}
+
+/* ---------------------------------------------------------------- views, project picker, layout */
+function showView(name) {
+  for (const b of $$('#rail button')) b.classList.toggle('on', b.dataset.view === name);
+  for (const s of $$('#side > section')) s.classList.toggle('hidden', s.id !== 'view-' + name);
+  document.body.classList.remove('narrow-main');
+  if (name === 'runs') loadRuns();
+}
+for (const b of $$('#rail button')) b.addEventListener('click', () => showView(b.dataset.view));
+function showBottom(name) {
+  for (const b of $$('#btabs .tabbtn')) b.classList.toggle('on', b.dataset.b === name);
+  $('#b-activity').classList.toggle('hidden', name !== 'activity'); $('#b-chat').classList.toggle('hidden', name !== 'chat');
+  $('#toolsToggle').classList.toggle('hidden', name !== 'activity'); $('#btnClear').classList.toggle('hidden', name !== 'activity');
+}
+for (const b of $$('#btabs .tabbtn')) b.addEventListener('click', () => showBottom(b.dataset.b));
+
+const loadProject = act(async () => { const info = await api('/api/project'); $('#gitWarn').classList.toggle('hidden', info.git !== false); return info; });
+let fsAt = null;
+const browse = act(async path => {
+  const d = await api('/api/fs' + (path ? '?path=' + encodeURIComponent(path) : '')); fsAt = d;
+  $('#fsPath').value = d.path; const list = $('#fsList'); list.replaceChildren();
+  for (const dir of d.dirs) {
+    const row = el('div', '', dir.name + (dir.codeguild ? '   (set up)' : dir.git ? '   (git)' : ''));
+    row.addEventListener('click', () => browse(dir.path)); list.append(row);
+  }
+  if (!d.dirs.length) list.append(el('div', 'dim', 'No folders in here.'));
+});
+const switchTo = act(async path => {
+  if ([...tabs.values()].some(t => t.dirty) && !confirm('Files with unsaved changes are open. Switch project anyway?')) return;
+  await api('/api/project', {path}); $('#picker').close();
+  for (const id of [...tabs.keys()]) closeTab(id, true);
+  mates = {}; $('#log').replaceChildren(); $('#goal').value = ''; selectedTask = null;
+  await refresh(); loadProject(); loadFiles(); loadChat(); loadRuns(); welcome();
+});
+$('#root').addEventListener('click', act(async () => {
+  const info = await api('/api/project'), rec = $('#recent'); rec.replaceChildren();
+  if ((info.recent || []).length) rec.append(el('div', 'dim', 'Recently opened'));
+  for (const p of info.recent || []) { const row = el('div', 'code', p); row.style.cursor = 'pointer'; row.addEventListener('click', () => switchTo(p)); rec.append(row); }
+  await browse(info.root); $('#picker').showModal ? $('#picker').showModal() : $('#picker').setAttribute('open', '');
+}));
+$('#pickClose').addEventListener('click', () => $('#picker').close());
+$('#fsGo').addEventListener('click', () => browse($('#fsPath').value));
+$('#fsUp').addEventListener('click', () => fsAt && fsAt.parent && browse(fsAt.parent));
+$('#fsOpen').addEventListener('click', () => switchTo($('#fsPath').value));
+
+welcome(); showBottom('activity');
+refresh().then(() => { loadProject(); loadFiles(); loadChat(); loadRuns(); connect(); }).catch(e => logLine('bad', 'could not reach the codeguild server: ' + e.message));
+</script>
+</body>
+</html>

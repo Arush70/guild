@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from guild.agent import extract_json
-from guild.config import list_available, load_profile, load_role
-from guild.providers.base import Usage
-from guild.providers.router import CostTracker
-from guild.tools.registry import REGISTRY
+from codeguild.agent import extract_json
+from codeguild.config import list_available, load_profile, load_role
+from codeguild.providers.base import Usage
+from codeguild.providers.router import CostTracker
+from codeguild.tools.registry import REGISTRY
 
 
 def test_builtin_profiles_and_roles_load():
@@ -58,7 +58,7 @@ def test_extract_json(text, expected):
 
 
 def test_plan_schema_drops_dangling_dependencies():
-    from guild.schemas import validate
+    from codeguild.schemas import validate
 
     d, err = validate(
         "lead",
@@ -94,13 +94,13 @@ def test_cost_is_tokens_times_price_per_million():
     ],
 )
 def test_vague_done_when(text, vague):
-    from guild.plan import vague_done_when
+    from codeguild.plan import vague_done_when
 
     assert vague_done_when(text) is vague
 
 
 def test_extract_text_tool_calls_variants():
-    from guild.agent import extract_text_tool_calls
+    from codeguild.agent import extract_text_tool_calls
 
     allowed = {"read_file", "edit_file"}
     txt = 'I will read it.\n```json\n{"name": "read_file", "arguments": {"path": "a.py"}}\n```\nthen {"tool": "edit_file", "args": {"path": "a.py", "old_text": "x", "new_text": "y"}}'

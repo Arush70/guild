@@ -2,8 +2,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from guild import hardware as hw
-from guild.cli import app
+from codeguild import hardware as hw
+from codeguild.cli import app
 
 
 def _machine(vram=None, ram=None, models=(), keys=None):
@@ -69,18 +69,18 @@ def test_init_wizard_noninteractive(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(hw, "detect", lambda: _machine(vram=8, ram=16, models=["qwen2.5-coder:7b"]))
     r = CliRunner().invoke(app, ["init", str(tmp_path), "-y"])
     assert r.exit_code == 0, r.output
-    assert (tmp_path / ".guild" / "config.yaml").exists()
-    prof = (tmp_path / ".guild" / "profiles" / "free.yaml").read_text()
+    assert (tmp_path / ".codeguild" / "config.yaml").exists()
+    prof = (tmp_path / ".codeguild" / "profiles" / "free.yaml").read_text()
     assert "qwen2.5-coder:7b" in prof and "ollama pull" in r.output
-    assert ".guild/runs/" in (tmp_path / ".gitignore").read_text()
+    assert ".codeguild/runs/" in (tmp_path / ".gitignore").read_text()
 
 
 def test_init_wizard_interactive_answers(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(hw, "detect", lambda: _machine(vram=8, keys={"anthropic": True}))
     r = CliRunner().invoke(app, ["init", str(tmp_path)], input="lite\npython -m pytest -q\ny\nn\n")
     assert r.exit_code == 0, r.output
-    assert "profile: lite" in (tmp_path / ".guild" / "config.yaml").read_text()
-    assert (tmp_path / ".guild" / "profiles" / "lite.yaml").exists()
+    assert "profile: lite" in (tmp_path / ".codeguild" / "config.yaml").read_text()
+    assert (tmp_path / ".codeguild" / "profiles" / "lite.yaml").exists()
     assert (tmp_path / ".git").is_dir()  # offered and accepted git init
 
 

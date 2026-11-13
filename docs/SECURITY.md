@@ -1,6 +1,6 @@
-# Security Requirements — guild
+# Security Requirements — codeguild
 
-guild runs LLM-generated actions against a developer's own machine. The threat model is:
+codeguild runs LLM-generated actions against a developer's own machine. The threat model is:
 an untrusted model (or a prompt-injected file in the repo) tries to read secrets, escape
 the project, run destructive commands, or slip bad code into `main`.
 
@@ -8,12 +8,12 @@ the project, run destructive commands, or slip bad code into `main`.
 
 - All tool paths resolve inside the project root; `..` and absolute escapes are refused
   (`ToolContext.resolve`). Symlinks are resolved before the check.
-- Ignore rules hide `.git`, `.guild`, `.venv`, `node_modules` etc. from listing/search.
+- Ignore rules hide `.git`, `.codeguild`, `.venv`, `node_modules` etc. from listing/search.
 - Reviewer roles (critic, security, performance, verifier, assistant) are read-only:
   no `write_file`/`edit_file`, and `run_command` refuses commands that look mutating.
 - The docs role may only write `*.md`.
 - No role can write into `.git/` (hooks and config are executed by git on the host) or
-  `.guild/` (guild's own config, roles, plan, traces).
+  `.codeguild/` (codeguild's own config, roles, plan, traces).
 - Agents cannot read `.env` / `.env.*` files (`.env.example` is allowed); `search` skips them
   and never follows a symlink that points out of the project.
 - An agent can only call the tools listed in its role YAML, whatever tool name the model emits.
@@ -23,7 +23,7 @@ the project, run destructive commands, or slip bad code into `main`.
 
 ## Pair mode (interactive)
 
-- `guild pair` / the pair modes of the dashboard and VS Code let an agent change the working
+- `codeguild pair` / the pair modes of the dashboard and VS Code let an agent change the working
   tree directly (no branch). Every file change and every command outside the inspection
   allowlist is shown to the owner first and only happens on approval; "approve all edits" lasts
   for one turn (dashboard / VS Code) or one session (CLI) and never covers commands.
@@ -44,20 +44,20 @@ the project, run destructive commands, or slip bad code into `main`.
 - Credential files — `.env*` (not `.env.example`), private keys (`id_rsa`, `*.pem`, `*.key`),
   `.netrc`, `.npmrc`, `.pypirc`, `credentials.json`, `secrets.*` — are not read by the file
   tools, under any name Windows opens them by (`.ENV`, `.env.`, `.env::$DATA`). One created
-  during a task is left out of the review diff and of guild's commit.
+  during a task is left out of the review diff and of codeguild's commit.
 - API keys are read from the environment only; never written to config, plan or trace.
 - `.env` is git-ignored; `.env.example` documents names only.
-- Traces may contain code excerpts and tool output; `.guild/runs/` is git-ignored by
-  `guild init`.
+- Traces may contain code excerpts and tool output; `.codeguild/runs/` is git-ignored by
+  `codeguild init`.
 
 ## Git
 
-- guild only commits on a `guild/<task>` branch it created from a clean tracked tree.
+- codeguild only commits on a `codeguild/<task>` branch it created from a clean tracked tree.
 - It never merges, pushes, rebases, resets or deletes branches on its own; the dashboard
   merge/discard are explicit human actions and refuse on a dirty tree or conflicts.
-- `.guild/` is excluded from guild's commits and from review diffs.
-- One guild process at a time may plan, run tasks or pair in a project (an OS lock on
-  `.guild/lock`); a second one stops with "… is already working on this project".
+- `.codeguild/` is excluded from codeguild's commits and from review diffs.
+- One codeguild process at a time may plan, run tasks or pair in a project (an OS lock on
+  `.codeguild/lock`); a second one stops with "… is already working on this project".
 
 ## Network
 
@@ -65,7 +65,7 @@ the project, run destructive commands, or slip bad code into `main`.
   It also refuses requests whose `Host` is not localhost and state-changing requests whose
   `Origin` is not the dashboard's own, port included (a web page cannot drive it through
   DNS rebinding or a cross-site POST, and neither can another program's page on localhost).
-  Extra host names can be allowed with `GUILD_UI_HOSTS=name1,name2`.
+  Extra host names can be allowed with `CODEGUILD_UI_HOSTS=name1,name2`.
   Do not expose it with a reverse proxy without adding auth.
 - Model providers are contacted over HTTPS via the official SDKs; Ollama is local HTTP.
 - `web_fetch` (researcher/kaggle/assistant) fetches public http(s) URLs only — localhost,
@@ -78,21 +78,28 @@ the project, run destructive commands, or slip bad code into `main`.
 
 - `limits.max_usd_per_run` is enforced before every model call. The `free` profile is $0
   and refuses priced models even if a key is present — before the request is sent.
-  `.guild/prices.yaml` (`provider/model: [input, output]` per 1M tokens, or `0`) overrides the
+  `.codeguild/prices.yaml` (`provider/model: [input, output]` per 1M tokens, or `0`) overrides the
   built-in list prices, e.g. to mark a free-tier model as free.
 - A cap can only be kept for models with a known price. Under any cap, a hosted model that is
   not in the price table is refused before the request (it used to count as $0 and so
-  could spend without limit). Add it to `.guild/prices.yaml`. Models served from this machine
+  could spend without limit). Add it to `.codeguild/prices.yaml`. Models served from this machine
   (Ollama, a local gateway) are exempt.
 - Token counts from a provider that are not counts (text, null, negative) are taken as 0.
 - Prices are estimates from list prices; the provider dashboard is the truth.
 
 ## Projects from other people
 
-- Configuration under `.guild/` that is tracked by git came with the repository. Guild runs
-  nothing in such a project until `guild trust` has shown you its test command, lint
-  command, sandbox and role/profile files, and you agreed. A later change asks again.
+- Configuration under `.codeguild/` that is tracked by git may have come with the repository.
+  Codeguild runs nothing in such a folder until `codeguild trust` has shown you its test
+  command, lint command, sandbox and role/profile files, and you agreed. Projects you set up
+  yourself with `codeguild init` are trusted from the start. Trust is per folder.
 - The VS Code extension does not run in untrusted workspaces.
+
+## Editing in the dashboard
+
+- Saving a file from the editor obeys the agents' write rules (inside the project, never
+  `.git` or `.codeguild`), is refused while a job runs, and is refused when the file changed
+  on disk after it was opened.
 
 ## Inspection commands (read-only roles; pair mode runs these without asking)
 
@@ -112,7 +119,7 @@ the project, run destructive commands, or slip bad code into `main`.
   writes no `.pyc` files (a stale one could make a test run the previous version of a file).
 
 - `sandbox: docker` runs test/commands in a throwaway container with the project
-  bind-mounted (`.git` and `.guild` read-only), `--network none`, 2 GB / 2 CPU limits. Use it
+  bind-mounted (`.git` and `.codeguild` read-only), `--network none`, 2 GB / 2 CPU limits. Use it
   for untrusted repos. An unknown `sandbox:` value is an error, never a silent "local".
 - `sandbox: local` trusts the project (default for your own code).
 

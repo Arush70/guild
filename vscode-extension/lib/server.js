@@ -1,5 +1,5 @@
 'use strict';
-// Finds the `guild` command and runs `guild ui --no-browser` as a child process.
+// Finds the `codeguild` command and runs `codeguild ui --no-browser` as a child process.
 // No `vscode` import: testable with plain node.
 
 const cp = require('child_process');
@@ -20,7 +20,7 @@ function splitCommand(line) {
 }
 
 /**
- * Ways to launch guild, best first. Each is argv (command + leading args).
+ * Ways to launch codeguild, best first. Each is argv (command + leading args).
  * @param {{workspace: string, configured?: string, python?: string}} o
  */
 function candidates(o) {
@@ -29,12 +29,12 @@ function candidates(o) {
   if (configured.length) list.push(configured);
   for (const venv of ['.venv', 'venv', 'env']) {
     const exe = IS_WIN
-      ? path.join(o.workspace, venv, 'Scripts', 'guild.exe')
-      : path.join(o.workspace, venv, 'bin', 'guild');
+      ? path.join(o.workspace, venv, 'Scripts', 'codeguild.exe')
+      : path.join(o.workspace, venv, 'bin', 'codeguild');
     if (fs.existsSync(exe)) list.push([exe]);
   }
-  if (o.python) list.push([o.python, '-m', 'guild.cli']);
-  list.push(['guild']);
+  if (o.python) list.push([o.python, '-m', 'codeguild.cli']);
+  list.push(['codeguild']);
   return list;
 }
 
@@ -65,7 +65,7 @@ function ping(port) {
 }
 
 /**
- * Start `guild ui` for a folder and wait until it answers.
+ * Start `codeguild ui` for a folder and wait until it answers.
  * @returns {Promise<{proc: import('child_process').ChildProcess, url: string, port: number, argv: string[]}>}
  */
 async function start({ workspace, configured, python, port, log = () => {}, timeoutMs = 45000 }) {
@@ -93,7 +93,7 @@ async function start({ workspace, configured, python, port, log = () => {}, time
     const onData = (d) => {
       const s = d.toString('utf8');
       output = (output + s).slice(-4000);
-      for (const line of s.split(/\r?\n/)) if (line.trim()) log(`[guild ui] ${line}`);
+      for (const line of s.split(/\r?\n/)) if (line.trim()) log(`[codeguild ui] ${line}`);
     };
     proc.stdout.on('data', onData);
     proc.stderr.on('data', onData);
@@ -118,7 +118,7 @@ async function start({ workspace, configured, python, port, log = () => {}, time
         : 'did not answer in time';
     tried.push(`${argv.join(' ')}: ${why}`);
   }
-  const err = new Error(`could not start guild.\n${tried.map((t) => '  - ' + t).join('\n')}`);
+  const err = new Error(`could not start codeguild.\n${tried.map((t) => '  - ' + t).join('\n')}`);
   err.tried = tried;
   throw err;
 }

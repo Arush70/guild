@@ -1,8 +1,8 @@
 {
-  "name": "guild-vscode",
-  "displayName": "Guild",
-  "description": "Run guild \u2014 a budget-aware multi-agent coding team \u2014 from the VS Code side bar: plan, run tasks, watch the team work, review and merge branches, and pair-program in a chat that asks before every change.",
-  "version": "0.2.1",
+  "name": "codeguild-vscode",
+  "displayName": "Codeguild",
+  "description": "Run codeguild \u2014 a budget-aware multi-agent coding team \u2014 from the VS Code side bar: plan, run tasks, watch the team work, review and merge branches, and pair-program in a chat that asks before every change.",
+  "version": "0.3.0",
   "publisher": "arush70",
   "license": "MIT",
   "repository": {
@@ -27,12 +27,12 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": false,
-      "description": "Guild starts the guild program found in the opened folder (its .venv) and runs that folder's configured test command."
+      "description": "Codeguild starts the codeguild program found in the opened folder (its .venv) and runs that folder's configured test command."
     },
     "virtualWorkspaces": false
   },
   "activationEvents": [
-    "workspaceContains:.guild/config.yaml"
+    "workspaceContains:.codeguild/config.yaml"
   ],
   "scripts": {
     "test": "node --test test/unit.test.js test/e2e.test.js",
@@ -42,20 +42,20 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "guild",
-          "title": "Guild",
-          "icon": "media/guild.svg"
+          "id": "codeguild",
+          "title": "Codeguild",
+          "icon": "media/codeguild.svg"
         }
       ]
     },
     "views": {
-      "guild": [
+      "codeguild": [
         {
-          "id": "guild.plan",
+          "id": "codeguild.plan",
           "name": "Plan"
         },
         {
-          "id": "guild.chat",
+          "id": "codeguild.chat",
           "name": "Chat & Activity",
           "type": "webview"
         }
@@ -63,356 +63,356 @@
     },
     "viewsWelcome": [
       {
-        "view": "guild.plan",
-        "contents": "Open a folder to use guild.",
-        "when": "guild.state == 'noFolder'"
+        "view": "codeguild.plan",
+        "contents": "Open a folder to use codeguild.",
+        "when": "codeguild.state == 'noFolder'"
       },
       {
-        "view": "guild.plan",
-        "contents": "Guild is not set up in this folder yet.\n[Set up guild here](command:guild.init)\nThe wizard detects your hardware, API keys and test command, then writes .guild/config.yaml.\n[Start without the wizard](command:guild.start)",
-        "when": "guild.state == 'uninitialised'"
+        "view": "codeguild.plan",
+        "contents": "Codeguild is not set up in this folder yet.\n[Set up codeguild here](command:codeguild.init)\nThe wizard detects your hardware, API keys and test command, then writes .codeguild/config.yaml.\n[Start without the wizard](command:codeguild.start)",
+        "when": "codeguild.state == 'uninitialised'"
       },
       {
-        "view": "guild.plan",
-        "contents": "Guild is not running.\n[Start guild](command:guild.start)",
-        "when": "guild.state == 'stopped'"
+        "view": "codeguild.plan",
+        "contents": "Codeguild is not running.\n[Start codeguild](command:codeguild.start)",
+        "when": "codeguild.state == 'stopped'"
       },
       {
-        "view": "guild.plan",
-        "contents": "Starting guild\u2026",
-        "when": "guild.state == 'starting'"
+        "view": "codeguild.plan",
+        "contents": "Starting codeguild\u2026",
+        "when": "codeguild.state == 'starting'"
       },
       {
-        "view": "guild.plan",
-        "contents": "Guild could not start. Usually the `guild` command is not on VS Code's PATH: set the full path in the settings (for example C:\\\\path\\\\to\\\\.venv\\\\Scripts\\\\guild.exe).\n[Open settings](command:guild.openSettings)\n[Try again](command:guild.start)\n[Show log](command:guild.showLog)",
-        "when": "guild.state == 'error'"
+        "view": "codeguild.plan",
+        "contents": "Codeguild could not start. Usually the `codeguild` command is not on VS Code's PATH: set the full path in the settings (for example C:\\\\path\\\\to\\\\.venv\\\\Scripts\\\\codeguild.exe).\n[Open settings](command:codeguild.openSettings)\n[Try again](command:codeguild.start)\n[Show log](command:codeguild.showLog)",
+        "when": "codeguild.state == 'error'"
       },
       {
-        "view": "guild.plan",
-        "contents": "No plan yet. Describe what you want built and the Lead will break it into tasks.\n[Create a plan](command:guild.plan)",
-        "when": "guild.state == 'running' && !guild.hasPlan"
+        "view": "codeguild.plan",
+        "contents": "No plan yet. Describe what you want built and the Lead will break it into tasks.\n[Create a plan](command:codeguild.plan)",
+        "when": "codeguild.state == 'running' && !codeguild.hasPlan"
       }
     ],
     "commands": [
       {
-        "command": "guild.start",
+        "command": "codeguild.start",
         "title": "Start",
-        "category": "Guild"
+        "category": "Codeguild"
       },
       {
-        "command": "guild.stop",
+        "command": "codeguild.stop",
         "title": "Stop Server",
-        "category": "Guild"
+        "category": "Codeguild"
       },
       {
-        "command": "guild.restart",
+        "command": "codeguild.restart",
         "title": "Restart Server",
-        "category": "Guild"
+        "category": "Codeguild"
       },
       {
-        "command": "guild.cancel",
+        "command": "codeguild.cancel",
         "title": "Stop Current Job",
-        "category": "Guild",
+        "category": "Codeguild",
         "icon": "$(debug-stop)"
       },
       {
-        "command": "guild.init",
-        "title": "Set Up in This Folder (guild init)",
-        "category": "Guild"
+        "command": "codeguild.init",
+        "title": "Set Up in This Folder (codeguild init)",
+        "category": "Codeguild"
       },
       {
-        "command": "guild.plan",
+        "command": "codeguild.plan",
         "title": "New Plan\u2026",
-        "category": "Guild",
+        "category": "Codeguild",
         "icon": "$(add)"
       },
       {
-        "command": "guild.revisePlan",
+        "command": "codeguild.revisePlan",
         "title": "Revise Plan\u2026",
-        "category": "Guild",
+        "category": "Codeguild",
         "icon": "$(edit)"
       },
       {
-        "command": "guild.runNext",
+        "command": "codeguild.runNext",
         "title": "Run Next Task",
-        "category": "Guild",
+        "category": "Codeguild",
         "icon": "$(play)"
       },
       {
-        "command": "guild.runAll",
+        "command": "codeguild.runAll",
         "title": "Run All Tasks",
-        "category": "Guild",
+        "category": "Codeguild",
         "icon": "$(run-all)"
       },
       {
-        "command": "guild.refresh",
+        "command": "codeguild.refresh",
         "title": "Refresh",
-        "category": "Guild",
+        "category": "Codeguild",
         "icon": "$(refresh)"
       },
       {
-        "command": "guild.runTask",
+        "command": "codeguild.runTask",
         "title": "Run Task",
-        "category": "Guild",
+        "category": "Codeguild",
         "icon": "$(play)"
       },
       {
-        "command": "guild.diffTask",
+        "command": "codeguild.diffTask",
         "title": "Review Changes",
-        "category": "Guild",
+        "category": "Codeguild",
         "icon": "$(diff)"
       },
       {
-        "command": "guild.mergeTask",
+        "command": "codeguild.mergeTask",
         "title": "Merge Branch",
-        "category": "Guild",
+        "category": "Codeguild",
         "icon": "$(git-merge)"
       },
       {
-        "command": "guild.discardTask",
+        "command": "codeguild.discardTask",
         "title": "Discard Branch",
-        "category": "Guild",
+        "category": "Codeguild",
         "icon": "$(trash)"
       },
       {
-        "command": "guild.editTask",
+        "command": "codeguild.editTask",
         "title": "Edit Task\u2026",
-        "category": "Guild"
+        "category": "Codeguild"
       },
       {
-        "command": "guild.deleteTask",
+        "command": "codeguild.deleteTask",
         "title": "Delete Task",
-        "category": "Guild"
+        "category": "Codeguild"
       },
       {
-        "command": "guild.markTask",
+        "command": "codeguild.markTask",
         "title": "Set Task Status\u2026",
-        "category": "Guild"
+        "category": "Codeguild"
       },
       {
-        "command": "guild.setProfile",
+        "command": "codeguild.setProfile",
         "title": "Switch Profile\u2026",
-        "category": "Guild"
+        "category": "Codeguild"
       },
       {
-        "command": "guild.doctor",
+        "command": "codeguild.doctor",
         "title": "Doctor (Check Models)",
-        "category": "Guild"
+        "category": "Codeguild"
       },
       {
-        "command": "guild.showRuns",
+        "command": "codeguild.showRuns",
         "title": "Show Run Trace\u2026",
-        "category": "Guild"
+        "category": "Codeguild"
       },
       {
-        "command": "guild.showLog",
+        "command": "codeguild.showLog",
         "title": "Show Log",
-        "category": "Guild",
+        "category": "Codeguild",
         "icon": "$(output)"
       },
       {
-        "command": "guild.openDashboard",
+        "command": "codeguild.openDashboard",
         "title": "Open Dashboard in Browser",
-        "category": "Guild"
+        "category": "Codeguild"
       },
       {
-        "command": "guild.openSettings",
+        "command": "codeguild.openSettings",
         "title": "Open Settings",
-        "category": "Guild"
+        "category": "Codeguild"
       },
       {
-        "command": "guild.clearChat",
+        "command": "codeguild.clearChat",
         "title": "Clear Chat",
-        "category": "Guild",
+        "category": "Codeguild",
         "icon": "$(clear-all)"
       }
     ],
     "menus": {
       "view/title": [
         {
-          "command": "guild.plan",
-          "when": "view == guild.plan && guild.state == 'running'",
+          "command": "codeguild.plan",
+          "when": "view == codeguild.plan && codeguild.state == 'running'",
           "group": "navigation@1"
         },
         {
-          "command": "guild.runNext",
-          "when": "view == guild.plan && guild.hasPlan && !guild.busy",
+          "command": "codeguild.runNext",
+          "when": "view == codeguild.plan && codeguild.hasPlan && !codeguild.busy",
           "group": "navigation@2"
         },
         {
-          "command": "guild.runAll",
-          "when": "view == guild.plan && guild.hasPlan && !guild.busy",
+          "command": "codeguild.runAll",
+          "when": "view == codeguild.plan && codeguild.hasPlan && !codeguild.busy",
           "group": "navigation@3"
         },
         {
-          "command": "guild.cancel",
-          "when": "view == guild.plan && guild.busy",
+          "command": "codeguild.cancel",
+          "when": "view == codeguild.plan && codeguild.busy",
           "group": "navigation@2"
         },
         {
-          "command": "guild.refresh",
-          "when": "view == guild.plan && guild.state == 'running'",
+          "command": "codeguild.refresh",
+          "when": "view == codeguild.plan && codeguild.state == 'running'",
           "group": "navigation@9"
         },
         {
-          "command": "guild.revisePlan",
-          "when": "view == guild.plan && guild.hasPlan",
+          "command": "codeguild.revisePlan",
+          "when": "view == codeguild.plan && codeguild.hasPlan",
           "group": "1_plan@1"
         },
         {
-          "command": "guild.setProfile",
-          "when": "view == guild.plan && guild.state == 'running'",
+          "command": "codeguild.setProfile",
+          "when": "view == codeguild.plan && codeguild.state == 'running'",
           "group": "2_cfg@1"
         },
         {
-          "command": "guild.doctor",
-          "when": "view == guild.plan && guild.state == 'running'",
+          "command": "codeguild.doctor",
+          "when": "view == codeguild.plan && codeguild.state == 'running'",
           "group": "2_cfg@2"
         },
         {
-          "command": "guild.showRuns",
-          "when": "view == guild.plan && guild.state == 'running'",
+          "command": "codeguild.showRuns",
+          "when": "view == codeguild.plan && codeguild.state == 'running'",
           "group": "3_more@1"
         },
         {
-          "command": "guild.openDashboard",
-          "when": "view == guild.plan && guild.state == 'running'",
+          "command": "codeguild.openDashboard",
+          "when": "view == codeguild.plan && codeguild.state == 'running'",
           "group": "3_more@2"
         },
         {
-          "command": "guild.stop",
-          "when": "view == guild.plan && guild.state == 'running'",
+          "command": "codeguild.stop",
+          "when": "view == codeguild.plan && codeguild.state == 'running'",
           "group": "3_more@3"
         },
         {
-          "command": "guild.showLog",
-          "when": "view == guild.chat",
+          "command": "codeguild.showLog",
+          "when": "view == codeguild.chat",
           "group": "navigation@1"
         },
         {
-          "command": "guild.clearChat",
-          "when": "view == guild.chat",
+          "command": "codeguild.clearChat",
+          "when": "view == codeguild.chat",
           "group": "navigation@2"
         },
         {
-          "command": "guild.restart",
-          "when": "view == guild.plan && guild.state == 'running'",
+          "command": "codeguild.restart",
+          "when": "view == codeguild.plan && codeguild.state == 'running'",
           "group": "3_more@4"
         },
         {
-          "command": "guild.cancel",
-          "when": "view == guild.chat && guild.busy",
+          "command": "codeguild.cancel",
+          "when": "view == codeguild.chat && codeguild.busy",
           "group": "navigation@0"
         }
       ],
       "view/item/context": [
         {
-          "command": "guild.runTask",
-          "when": "view == guild.plan && viewItem =~ /^task/ && !(viewItem =~ / done/) && !guild.busy",
+          "command": "codeguild.runTask",
+          "when": "view == codeguild.plan && viewItem =~ /^task/ && !(viewItem =~ / done/) && !codeguild.busy",
           "group": "inline@1"
         },
         {
-          "command": "guild.diffTask",
-          "when": "view == guild.plan && viewItem =~ / hasBranch/",
+          "command": "codeguild.diffTask",
+          "when": "view == codeguild.plan && viewItem =~ / hasBranch/",
           "group": "inline@2"
         },
         {
-          "command": "guild.mergeTask",
-          "when": "view == guild.plan && viewItem =~ / hasBranch/ && !guild.busy",
+          "command": "codeguild.mergeTask",
+          "when": "view == codeguild.plan && viewItem =~ / hasBranch/ && !codeguild.busy",
           "group": "inline@3"
         },
         {
-          "command": "guild.runTask",
-          "when": "view == guild.plan && viewItem =~ /^task/ && !guild.busy",
+          "command": "codeguild.runTask",
+          "when": "view == codeguild.plan && viewItem =~ /^task/ && !codeguild.busy",
           "group": "1_run@1"
         },
         {
-          "command": "guild.diffTask",
-          "when": "view == guild.plan && viewItem =~ / hasBranch/",
+          "command": "codeguild.diffTask",
+          "when": "view == codeguild.plan && viewItem =~ / hasBranch/",
           "group": "2_branch@1"
         },
         {
-          "command": "guild.mergeTask",
-          "when": "view == guild.plan && viewItem =~ / hasBranch/ && !guild.busy",
+          "command": "codeguild.mergeTask",
+          "when": "view == codeguild.plan && viewItem =~ / hasBranch/ && !codeguild.busy",
           "group": "2_branch@2"
         },
         {
-          "command": "guild.discardTask",
-          "when": "view == guild.plan && viewItem =~ / hasBranch/ && !guild.busy",
+          "command": "codeguild.discardTask",
+          "when": "view == codeguild.plan && viewItem =~ / hasBranch/ && !codeguild.busy",
           "group": "2_branch@3"
         },
         {
-          "command": "guild.editTask",
-          "when": "view == guild.plan && viewItem =~ /^task/ && !guild.busy",
+          "command": "codeguild.editTask",
+          "when": "view == codeguild.plan && viewItem =~ /^task/ && !codeguild.busy",
           "group": "3_edit@1"
         },
         {
-          "command": "guild.markTask",
-          "when": "view == guild.plan && viewItem =~ /^task/ && !guild.busy",
+          "command": "codeguild.markTask",
+          "when": "view == codeguild.plan && viewItem =~ /^task/ && !codeguild.busy",
           "group": "3_edit@2"
         },
         {
-          "command": "guild.deleteTask",
-          "when": "view == guild.plan && viewItem =~ /^task/ && !guild.busy",
+          "command": "codeguild.deleteTask",
+          "when": "view == codeguild.plan && viewItem =~ /^task/ && !codeguild.busy",
           "group": "3_edit@3"
         }
       ],
       "commandPalette": [
         {
-          "command": "guild.runTask",
+          "command": "codeguild.runTask",
           "when": "false"
         },
         {
-          "command": "guild.diffTask",
+          "command": "codeguild.diffTask",
           "when": "false"
         },
         {
-          "command": "guild.mergeTask",
+          "command": "codeguild.mergeTask",
           "when": "false"
         },
         {
-          "command": "guild.discardTask",
+          "command": "codeguild.discardTask",
           "when": "false"
         },
         {
-          "command": "guild.editTask",
+          "command": "codeguild.editTask",
           "when": "false"
         },
         {
-          "command": "guild.deleteTask",
+          "command": "codeguild.deleteTask",
           "when": "false"
         },
         {
-          "command": "guild.markTask",
+          "command": "codeguild.markTask",
           "when": "false"
         }
       ]
     },
     "configuration": {
-      "title": "Guild",
+      "title": "Codeguild",
       "properties": {
-        "guild.command": {
+        "codeguild.command": {
           "type": "string",
           "default": "",
-          "markdownDescription": "How to launch guild, e.g. `C:\\path\\to\\.venv\\Scripts\\guild.exe` or `py -m guild.cli`. Empty: try the workspace's `.venv`, the selected Python interpreter, then `guild` on PATH.",
+          "markdownDescription": "How to launch codeguild, e.g. `C:\\path\\to\\.venv\\Scripts\\codeguild.exe` or `py -m codeguild.cli`. Empty: try the workspace's `.venv`, the selected Python interpreter, then `codeguild` on PATH.",
           "scope": "machine-overridable"
         },
-        "guild.autoStart": {
+        "codeguild.autoStart": {
           "type": "boolean",
           "default": true,
-          "description": "Start guild automatically when the opened folder already has .guild/config.yaml."
+          "description": "Start codeguild automatically when the opened folder already has .codeguild/config.yaml."
         },
-        "guild.port": {
+        "codeguild.port": {
           "type": "integer",
           "default": 0,
-          "description": "Port for the local guild server. 0 picks a free port."
+          "description": "Port for the local codeguild server. 0 picks a free port."
         },
-        "guild.profile": {
+        "codeguild.profile": {
           "type": "string",
           "default": "",
           "description": "Profile to use for jobs started from VS Code (free / lite / pro / your own). Empty: the project's configured profile."
         },
-        "guild.notifications": {
+        "codeguild.notifications": {
           "type": "boolean",
           "default": true,
           "description": "Show a notification when a task finishes or a job fails."
