@@ -759,3 +759,23 @@ def test_a_project_from_before_the_rename_is_carried_over(tmp_path):
     repo = Repo(tmp_path)
     assert repo.discard_branch("guild/t1-old")["output"] != "refusing"  # still its own branch
     assert "refusing" in repo.discard_branch("feature/x")["output"]
+
+
+@pytest.mark.parametrize(
+    ("existing", "written", "on_disk"),
+    [
+        (None, "a\nb\n", b"a\nb\n"),  # new file: exactly what the model wrote, on every OS
+        (None, "a\r\nb\r\n", b"a\r\nb\r\n"),
+        (b"x\r\ny\r\n", "a\nb\n", b"a\r\nb\r\n"),  # a CRLF file stays CRLF
+        (b"x\ny\n", "a\r\nb\r\n", b"a\nb\n"),  # an LF file stays LF
+        (b"caf\xe9\n", "a\nb\n", b"a\nb\n"),  # not UTF-8: replaced as written
+    ],
+)
+def test_written_files_keep_their_line_endings(project, existing, written, on_disk):
+    target = project / "f.txt"
+    ctx = _ctx(project)
+    if existing is not None:
+        target.write_bytes(existing)
+        dispatch(ctx, "read_file", {"path": "f.txt"})
+    assert dispatch(ctx, "write_file", {"path": "f.txt", "content": written}).ok
+    assert target.read_bytes() == on_disk

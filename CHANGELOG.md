@@ -156,4 +156,10 @@
   and after; pair-mode changes are approved from a diff; activity and chat sit in a bottom
   panel. The old single-page dashboard is gone.
 - `codeguild trust` is per folder, and projects set up with `codeguild init` are trusted.
+- Fix (Windows): a file an agent *created* was written with CRLF line endings whatever the
+  model wrote, because Python's text mode translates `\n` there. New files are now written
+  exactly as given; existing files keep their own line endings, as before. Found by the first
+  Windows CI run.
+- CI runs on Windows too (pytest and the VS Code extension tests), on pushes to `main` and on
+  pull requests.
 

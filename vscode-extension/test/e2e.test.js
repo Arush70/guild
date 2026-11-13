@@ -103,7 +103,8 @@ test('extension end to end against a real codeguild server', { skip: !hasGuild &
     assert.strictEqual(ctl.status, 'running', mock.channel.lines.join('\n'));
     assert.strictEqual(mock.context['codeguild.state'], 'running');
     assert.strictEqual(mock.context['codeguild.hasPlan'], false);
-    assert.strictEqual(ctl.state.root, project);
+    // the server reports the folder's full name; Windows may hand out a short alias (RUNNER~1)
+    assert.strictEqual(ctl.state.root, fs.realpathSync.native(project));
     assert.match(mock.bar.text, /codeguild/);
   });
 

@@ -68,7 +68,7 @@ src/codeguild/
 vscode-extension/     VS Code front end (ADR-014): extension.js + lib/{client,server,format}.js +
                       media/ (chat webview). No deps, no build. `npm test` (needs `codeguild` installed),
                       `npm run package` → .vsix. Talks only to the dashboard HTTP API.
-tests/                381 tests; FakeProvider in conftest.py scripts model replies, no API calls;
+tests/                386 tests; FakeProvider in conftest.py scripts model replies, no API calls;
                       test_robustness.py (schemas/repair/streaming), test_hardware.py (init wizard),
                       test_hardening*.py (2026-11-12 break-it audit: every test is an attack that worked),
                       test_pair.py (approval gate, modes, cancel, /api/pair, `codeguild pair`),

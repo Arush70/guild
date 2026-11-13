@@ -1,5 +1,8 @@
 name: ci
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]  # not tags: a tag points at old code, already tested when it was pushed
+  pull_request:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -9,8 +12,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python: ["3.10", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "${{ matrix.python }}" }
       - run: pip install -e ".[dev]"
       - run: ruff check src tests

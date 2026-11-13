@@ -248,13 +248,17 @@ def write_file(ctx: ToolContext, path: str, content: str) -> str:
         )
     p.parent.mkdir(parents=True, exist_ok=True)
     content = _as_text(content)
+    # An existing text file keeps its own line endings. Anything else gets the text exactly as
+    # the model wrote it, never the OS's newline (Windows would turn every \n into \r\n).
+    style = None
     if existed and p.is_file() and p.stat().st_size > 0:
-        try:
-            _write_text_raw(p, content, _newline_style(_read_text_raw(p)))
-        except UnicodeDecodeError:
-            p.write_text(content, encoding="utf-8")
+        with contextlib.suppress(UnicodeDecodeError):
+            style = _newline_style(_read_text_raw(p))
+    if style is None:
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
     else:
-        p.write_text(content, encoding="utf-8")
+        _write_text_raw(p, content, style)
     ctx.files_written.add(key)
     return f"{'overwrote' if existed else 'created'} {path} ({len(content)} chars)"
 

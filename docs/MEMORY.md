@@ -4,7 +4,7 @@ Current state of the project. Update at the end of every working session.
 
 ## Current status (2026-10-02)
 
-v0.3.0 (renamed to codeguild). 381 tests with scripted fake models (193 at the time of this entry); `ruff check` + `ruff format --check` clean (rule set
+v0.3.0 (renamed to codeguild). 386 tests with scripted fake models (193 at the time of this entry); `ruff check` + `ruff format --check` clean (rule set
 pinned). TASK-001 has one accepted free-profile real-model run; TASK-002 guards are in. A full
 code audit on 2026-10-02 fixed 14 defects (see CHANGELOG "Unreleased") — none of it is confirmed
 on a real model run yet; that re-run is the next step.
@@ -21,6 +21,10 @@ on a real model run yet; that re-run is the next step.
   scripted model, and a markup-injection sweep); those scripts are not in the repository.
 - **Trust** is per folder now, and `codeguild init` trusts what it sets up; the first version
   asked owners to re-approve their own committed config.
+- **First Windows CI run** (run #20): pytest green; two extension e2e tests failed. One was a
+  real bug: new files written by `write_file` got CRLF on Windows (text-mode newline
+  translation); fixed and pinned in `test_hardening3.py`. The other compared a path against
+  Windows' 8.3 short name of the same folder (test only).
 - **PyPI**: not uploaded. `python -m build` and `twine check` pass; the wheel is about 6 MB
   because of Monaco. Before uploading: a green Windows CI run, one real-model task.
 
