@@ -129,6 +129,7 @@ as-is.
 | `guild run [T1 T3 ...] [--all] [-y] [--skip security,docs]` | implement task(s) through the full loop |
 | `guild review [--ref main] [--security-only]` | Critic + Security on the current diff, nothing else |
 | `guild ask ROLE "question"` | ask one role (e.g. `researcher`, `security`) about the project |
+| `guild trust [-y]` | approve the `.guild` configuration that came with a cloned repository, after reading it |
 | `guild pair ["request"] [--mode ask\|auto-edits\|plan]` | pair-program in the terminal: an agent that edits your working tree and asks before every change |
 | `guild cost` | token + estimated cost table from saved traces |
 | `guild roles` | list roles and profiles (built-in + project overrides) |

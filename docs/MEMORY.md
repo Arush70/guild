@@ -4,7 +4,7 @@ Current state of the project. Update at the end of every working session.
 
 ## Current status (2026-10-02)
 
-v0.2.x. 366 tests with scripted fake models (193 at the time of this entry); `ruff check` + `ruff format --check` clean (rule set
+v0.2.x. 373 tests with scripted fake models (193 at the time of this entry); `ruff check` + `ruff format --check` clean (rule set
 pinned). TASK-001 has one accepted free-profile real-model run; TASK-002 guards are in. A full
 code audit on 2026-10-02 fixed 14 defects (see CHANGELOG "Unreleased") — none of it is confirmed
 on a real model run yet; that re-run is the next step.
@@ -42,10 +42,26 @@ and page, providers, verification. All found with running code; each has a test 
 - Also: Windows aliases of `.git`/`.env` (`.GIT`, `.git.`, `GIT~1`, `.env::$DATA`), UNC paths,
   a new `.env` committed/reviewed, plan.json values of the wrong type, dependency circles.
 
-Not fixed, known: a regex from a model can backtrack for a long time in `search` (Python has
-no regex timeout); a hostile repository that ships its own `.guild/config.yaml` controls the
-test command (same trust as `.vscode/tasks.json` — the extension is disabled in untrusted
-workspaces); `web_fetch` resolves a host twice (DNS rebinding window).
+Third pass (2026-11-13), closing what the audit had left open:
+
+- `search` matches in a worker process (`tools/_regex_worker.py`) that is killed after 20 s;
+  a pattern like `(a+)+$` used to hang the agent thread for good.
+- A repository whose `.guild` configuration is *tracked by git* must be approved once with
+  `guild trust` before any job runs (`trust.py`, ADR-020); a change to those files asks again.
+- `web_fetch` connects to the address it vetted (Host header and TLS name stay the host
+  name), so a second DNS answer cannot redirect it to localhost.
+- Anthropic model ids and prices updated from the models page (fable-5-2, opus-5-5,
+  sonnet-5-5, haiku-5-5; older ids stay priced). Every model a profile suggests has a price.
+- Event-stream readers are bounded (a stalled tab is disconnected and reconnects); the
+  extension no longer drops an event that shares a timestamp with the last one seen; a
+  failed commit is written to the trace again.
+- CI runs on Windows too. Until a Windows run is green, the Windows-only code (process
+  lock via `msvcrt`, `taskkill`, cmd.exe quoting) has still only been reasoned about.
+
+Left as it is: text tool calls. A model that *writes* a tool call as JSON has it executed;
+that gives a prompt-injected model nothing it could not do with a native call, and small
+local models depend on it. A zip download of a hostile project (no git) is not covered by
+the trust check.
 
 ## Untangle refactor 2026-11-12
 

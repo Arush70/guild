@@ -24,6 +24,7 @@ class GuildClient extends EventEmitter {
     this._req = null;
     this._timer = null;
     this._lastTs = 0;
+    this._atLastTs = new Set();
     this._connectedOnce = false;
   }
 
@@ -121,8 +122,19 @@ class GuildClient extends EventEmitter {
     // history was already seen: drop it. On the first connect keep it, flagged as replayed so
     // nobody pops up a notification for a job that failed an hour ago.
     const old = ts && ts < startedAt - 1;
-    if (!first && ev.kind !== 'token' && ts && ts <= this._lastTs) return;
-    if (ts > this._lastTs && ev.kind !== 'token') this._lastTs = ts;
+    if (ev.kind !== 'token' && ts) {
+      // Two events can carry the same timestamp, so "not newer" is not enough to call one
+      // a repeat: at the newest timestamp, remember exactly which events were delivered.
+      const key = JSON.stringify(ev);
+      if (ts > this._lastTs) {
+        this._lastTs = ts;
+        this._atLastTs = new Set([key]);
+      } else if (!first && (ts < this._lastTs || this._atLastTs.has(key))) {
+        return;
+      } else if (ts === this._lastTs) {
+        this._atLastTs.add(key);
+      }
+    }
     this.emit('event', ev, Boolean(old));
   }
 

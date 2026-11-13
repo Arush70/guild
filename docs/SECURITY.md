@@ -87,6 +87,13 @@ the project, run destructive commands, or slip bad code into `main`.
 - Token counts from a provider that are not counts (text, null, negative) are taken as 0.
 - Prices are estimates from list prices; the provider dashboard is the truth.
 
+## Projects from other people
+
+- Configuration under `.guild/` that is tracked by git came with the repository. Guild runs
+  nothing in such a project until `guild trust` has shown you its test command, lint
+  command, sandbox and role/profile files, and you agreed. A later change asks again.
+- The VS Code extension does not run in untrusted workspaces.
+
 ## Inspection commands (read-only roles; pair mode runs these without asking)
 
 - The command line is split the way a shell splits it; options are checked after quotes and

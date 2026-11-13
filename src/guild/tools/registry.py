@@ -6,15 +6,20 @@ Roles pick tools by name in their YAML `tools:` list.
 
 from __future__ import annotations
 
+import contextlib
 import difflib
 import fnmatch
 import inspect
+import json
 import os
 import re
+import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin, urlsplit
 
 from .. import __version__
 from ..providers.base import MALFORMED_ARGS, ToolSpec
@@ -22,10 +27,10 @@ from ..repo import Repo
 from .context import ToolContext
 from .policy import (
     READONLY_HINT,
-    blocked_url,
     is_secret_file,
     readonly_allowed,
     readonly_test_args_allowed,
+    vetted_address,
 )
 
 MAX_OUTPUT = 12_000  # chars returned to the model per tool call
@@ -68,6 +73,8 @@ def tool(
 
 MAX_PREVIEW = 20_000
 MAX_FETCH_BYTES = 2_000_000
+SEARCH_TIMEOUT = 20  # seconds for one search
+_REGEX_WORKER = Path(__file__).with_name("_regex_worker.py")
 MAX_PROPOSED = 400_000
 
 
@@ -345,26 +352,41 @@ def search(
     ctx: ToolContext, pattern: str, path: str = ".", glob: str | None = None, max: int = 100
 ) -> str:
     try:
-        rx = re.compile(pattern)
+        re.compile(pattern)
     except re.error as e:
         return f"bad regex: {e}"
     base = ctx.resolve(path)
     max = _int(max, 100) or 100
-    hits: list[str] = []
-    for rel, p in ctx.walk(base):
-        if glob and not fnmatch.fnmatch(p.name, glob):
-            continue
-        if is_secret_file(p.name) or not ctx.inside(p):
-            continue  # secrets, or a symlink pointing out of the project
-        try:
-            with open(p, encoding="utf-8", errors="ignore") as fh:
-                for i, line in enumerate(fh, 1):
-                    if rx.search(line):
-                        hits.append(f"{rel}:{i}: {line.rstrip()[:200]}")
-                        if len(hits) >= max:
-                            return "\n".join(hits) + f"\n...truncated at {max}"
-        except OSError:
-            continue
+    files = [
+        (rel, str(p))
+        for rel, p in ctx.walk(base)
+        if not (glob and not fnmatch.fnmatch(p.name, glob))
+        # secrets, or a symlink pointing out of the project
+        and not is_secret_file(p.name)
+        and ctx.inside(p)
+    ]
+    # the matching runs in a process of its own: a regex cannot be interrupted, a process can
+    try:
+        done = subprocess.run(
+            [sys.executable, "-I", str(_REGEX_WORKER)],
+            input=json.dumps({"pattern": pattern, "files": files, "max": max}),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=SEARCH_TIMEOUT,
+            check=False,
+        )
+        found = json.loads(done.stdout)
+    except subprocess.TimeoutExpired:
+        return (
+            f"search stopped after {SEARCH_TIMEOUT}s: this pattern takes too long to match "
+            "(nested repetition like (a+)+ ?). Use a simpler pattern or a narrower path."
+        )
+    except (OSError, ValueError) as e:
+        return f"search failed: {type(e).__name__}: {e}"
+    hits = found["hits"]
+    if found["truncated"]:
+        return "\n".join(hits) + f"\n...truncated at {max}"
     return "\n".join(hits) or "no matches"
 
 
@@ -472,6 +494,30 @@ def git_diff(ctx: ToolContext, ref: str = "", stat_only: bool = False) -> str:
 # ---------------------------------------------------------------------------- web
 
 
+@contextlib.contextmanager
+def _open_pinned(url: str, address: str):
+    """GET `url`, connecting to `address` (the one that was checked) while still asking for
+    the page by name: Host header, TLS server name and certificate check all use the name."""
+    import httpx
+
+    parts = urlsplit(url)
+    literal = f"[{address}]" if ":" in address else address
+    port = f":{parts.port}" if parts.port else ""
+    with (
+        httpx.Client(timeout=30, follow_redirects=False) as client,
+        client.stream(
+            "GET",
+            parts._replace(netloc=f"{literal}{port}").geturl(),
+            headers={
+                "User-Agent": f"guild/{__version__}",
+                "Host": parts.netloc.rsplit("@", 1)[-1],
+            },
+            extensions={"sni_hostname": parts.hostname} if parts.scheme == "https" else {},
+        ) as response,
+    ):
+        yield response
+
+
 @tool(
     "web_fetch",
     "Fetch a URL and return its text (HTML tags stripped). For documentation lookups.",
@@ -483,18 +529,12 @@ def web_fetch(ctx: ToolContext, url: str) -> str:
     url = str(url).strip()
     try:
         for _ in range(6):  # follow redirects by hand so every hop is checked
-            why = blocked_url(url)
+            address, why = vetted_address(url)
             if why:
                 raise PermissionError(why)
-            with httpx.stream(
-                "GET",
-                url,
-                timeout=30,
-                follow_redirects=False,
-                headers={"User-Agent": f"guild/{__version__}"},
-            ) as r:
+            with _open_pinned(url, address) as r:
                 if r.is_redirect and r.headers.get("location"):
-                    url = str(r.url.join(r.headers["location"]))
+                    url = urljoin(url, r.headers["location"])
                     continue
                 body = b""
                 for chunk in r.iter_bytes():  # a documentation page, not a download

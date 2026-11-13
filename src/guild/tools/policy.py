@@ -341,28 +341,41 @@ def readonly_allowed(cmd: str, root: Path | None = None) -> bool:
     return bool(segments) and all(_segment_allowed(seg.strip(), root) for seg in segments)
 
 
-def blocked_url(url: str) -> str | None:
-    """Reason to refuse a URL, or None. web_fetch is for public documentation: it must not
-    reach this machine (the dashboard and Ollama listen on localhost without auth), the LAN,
-    or cloud metadata addresses, whatever a web page or a model asks for."""
+def vetted_address(url: str) -> tuple[str | None, str | None]:
+    """(address to connect to, None) for a public http(s) URL, or (None, reason to refuse).
+
+    web_fetch is for public documentation: it must not reach this machine (the dashboard and
+    Ollama listen on localhost without auth), the LAN, or cloud metadata addresses, whatever
+    a web page or a model asks for. The caller connects to the returned address, not to the
+    name: a name that is looked up twice can answer "public" first and "127.0.0.1" second.
+    """
     import ipaddress
     import socket
     from urllib.parse import urlsplit
 
     try:
         parts = urlsplit(url)
+        port = parts.port
     except ValueError:
-        return "malformed URL"
+        return None, "malformed URL"
     if parts.scheme not in ("http", "https") or not parts.hostname:
-        return "only http(s) URLs are allowed"
+        return None, "only http(s) URLs are allowed"
     host = parts.hostname
     try:
-        infos = socket.getaddrinfo(host, parts.port or 0, proto=socket.IPPROTO_TCP)
+        infos = socket.getaddrinfo(host, port or 0, proto=socket.IPPROTO_TCP)
     except (OSError, UnicodeError):
-        return f"cannot resolve host {host}"
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        return None, f"cannot resolve host {host}"
+    addresses = [info[4][0].split("%")[0] for info in infos]
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
         mapped = getattr(ip, "ipv4_mapped", None)  # ::ffff:127.0.0.1 is 127.0.0.1
         if not (mapped or ip).is_global or ip.is_multicast:
-            return f"{host} is a local or private address"
-    return None
+            return None, f"{host} is a local or private address"
+    if not addresses:
+        return None, f"cannot resolve host {host}"
+    return addresses[0], None
+
+
+def blocked_url(url: str) -> str | None:
+    """Reason to refuse a URL, or None."""
+    return vetted_address(url)[1]

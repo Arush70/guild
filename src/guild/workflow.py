@@ -33,6 +33,7 @@ from .repo import BRANCH_PREFIX, Repo, TaskBranch, files_in_diff
 from .sandbox import make_sandbox
 from .tools import REGISTRY, ToolContext, Workspace
 from .trace import Trace, new_run_id
+from .trust import require_trust
 from .verify import Verification, Verifier
 
 # Roles that must never change the project, even when a project overrides their YAML and leaves
@@ -132,6 +133,7 @@ class Guild:
     ):
         """report(level, message): progress for a human. on_token(role, chunk): model output as
         it streams. on_event(event): every trace event as it is written."""
+        require_trust(root)  # before anything from the project's own configuration is used
         self.root = root
         self.cfg = cfg
         self.profile = profile
@@ -166,6 +168,11 @@ class Guild:
         self.trace.emit("fallback", slot=slot, model=model, reason=why)
         # level "fallback", like "phase": text for a terminal; front ends show the event instead
         self.report("fallback", f"{model} failed ({why}); trying next candidate for '{slot}'")
+
+    def _commit(self, branch: TaskBranch, message: str) -> None:
+        error = branch.commit(message)
+        if error:  # the owner was told; the trace keeps it for whoever reads the run later
+            self.trace.emit("note", role="guild", msg=f"git commit failed: {error[:300]}")
 
     def _warn(self, msg: str, role: str = "guild") -> None:
         """A warning for the owner that also belongs in the trace, under the role it is about."""
@@ -367,7 +374,7 @@ class Guild:
                 task_brief,
                 feedback,
                 project_ctx,
-                lambda n=rounds: branch.commit(f"guild({task.id}) round {n}: {task.title}"),
+                lambda n=rounds: self._commit(branch, f"guild({task.id}) round {n}: {task.title}"),
                 push_back=not pushed_back_on_block,
             )
             pushed_back_on_block = pushed_back_on_block or eng.pop("pushed_back", False)
@@ -472,7 +479,7 @@ class Guild:
                         context_blocks={"Task": task_brief, "Diff": branch.review_diff()[:20000]},
                     )
                 ).data
-                branch.commit(f"guild({task.id}) docs")
+                self._commit(branch, f"guild({task.id}) docs")
         elif task.status != "blocked":
             task.status = "todo"
             notes = feedback

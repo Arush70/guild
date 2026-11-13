@@ -297,14 +297,16 @@ class TaskBranch:
     def _on_branch(self) -> bool:
         return self.name is not None and self.repo.current_branch() == self.name
 
-    def commit(self, message: str) -> None:
+    def commit(self, message: str) -> str:
+        """Commit the task's work. Returns the git error when the commit failed, else ""."""
         if not self._on_branch:
-            return
+            return ""
         res = self.repo.commit_all(message, leave_untracked=self.untracked_before)
         if res.warning:
             self.warn(res.warning)
         if res.error:
             self.warn(f"git commit failed — the work is NOT on the branch: {res.error[:300]}")
+        return res.error
 
     def leave(self) -> None:
         """After a task that was not accepted (or crashed): return to where it started, so the

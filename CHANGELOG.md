@@ -140,3 +140,9 @@
   is no longer mistaken for a project because of `~/.guild`; broken config/plan/role files give
   one line (CLI exit 2, dashboard still loads); empty or malformed model streams fall back
   to the next model. 366 tests.
+- Third pass (2026-11-13): `search` cannot hang on a slow regex (worker process, 20 s);
+  **`guild trust`** — a repository that brings its own tracked `.guild` configuration must be
+  approved before guild runs anything in it; `web_fetch` pins the vetted address; Anthropic
+  model ids/prices updated (profiles now name claude-fable-5-2, opus-5-5, sonnet-5-5,
+  haiku-5-5); bounded event-stream backlog; CI on Windows. 373 tests.
+

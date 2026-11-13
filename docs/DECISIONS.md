@@ -114,3 +114,11 @@ The router refused models with a list price under a $0 cap, but a hosted model m
 the price table was costed at $0 and passed any cap. A cap that cannot be computed is not
 kept, so such a model is refused before the request with a message pointing to
 `.guild/prices.yaml`. Local endpoints are exempt; a profile without a cap is unaffected.
+
+## ADR-020 Configuration that arrives with a repository needs approval (accepted 2026-11-13)
+`.guild/config.yaml` names commands guild runs. `guild init` keeps `.guild/` out of git, so a
+*tracked* config, role or profile file was written by whoever published the repository. Guild
+refuses to start a job in such a project until the owner runs `guild trust`, which shows the
+commands and stores a fingerprint of those files in `~/.guild/trusted.json`; changed files ask
+again. The owner's own untracked configuration is never asked about.
+

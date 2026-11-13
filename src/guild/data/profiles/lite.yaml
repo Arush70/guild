@@ -13,15 +13,15 @@ monthly_budget_gbp: 15
 
 slots:
   frontier:
-    - anthropic/claude-fable-5-1
-    - anthropic/claude-sonnet-5
+    - anthropic/claude-fable-5-2
+    - anthropic/claude-sonnet-5-5
     - ollama/qwen3-coder:30b
   coder:
     - ollama/qwen3-coder:30b
     - ollama/qwen2.5-coder:7b
     - deepseek/deepseek-chat
   coder_escalation:        # used only after `escalate_after` failed rounds
-    - anthropic/claude-sonnet-5
+    - anthropic/claude-sonnet-5-5
     - deepseek/deepseek-chat
   reasoner:
     - deepseek/deepseek-reasoner

@@ -46,6 +46,7 @@ from ..providers.status import ollama_models, profile_status
 from ..repo import Repo
 from ..tools import Workspace
 from ..trace import jsonable, read_trace, summarize
+from ..trust import UntrustedProject, require_trust
 from ..workflow import PAIR_MODES, Guild, PairSession
 
 # --------------------------------------------------------------------------- job runner
@@ -58,6 +59,9 @@ class Job:
     started: float = field(default_factory=time.time)
     result: Any = None
     error: str | None = None
+
+
+SUBSCRIBER_BACKLOG = 5000  # events one event-stream reader may fall behind
 
 
 class Hub:
@@ -87,14 +91,21 @@ class Hub:
             self.history = self.history[-500:]
             subs = list(self.subscribers)
         for q in subs:
-            q.put(ev)
+            try:
+                q.put_nowait(ev)
+            except queue.Full:
+                # a reader that stopped reading (a suspended browser tab): end its stream. It
+                # reconnects by itself and is sent the recent history again.
+                q.closed = True
+                self.unsubscribe(q)
 
     def subscribe(self) -> queue.Queue:
-        q: queue.Queue = queue.Queue()
+        q: queue.Queue = queue.Queue(maxsize=SUBSCRIBER_BACKLOG)
+        q.closed = False
         with self.lock:
             self.subscribers.append(q)
-            for ev in self.history[-200:]:
-                q.put(ev)
+            for ev in self.history[-min(200, q.maxsize) :]:
+                q.put_nowait(ev)
         return q
 
     def unsubscribe(self, q: queue.Queue) -> None:
@@ -438,7 +449,7 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
         return {
             "root": str(S.root),
             "config": config.model_dump(),
-            "config_error": config_error,
+            "config_error": config_error or _untrusted(S.root),
             "plan_warnings": warnings,
             "profiles": list_available("profiles", S.root),
             "roles": list_available("roles", S.root),
@@ -760,7 +771,7 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
         def gen():
             try:
                 yield "retry: 2000\n\n"
-                while True:
+                while not (q.closed and q.empty()):
                     try:
                         ev = q.get(timeout=15)
                         yield f"data: {json.dumps(ev, default=str)}\n\n"
@@ -793,6 +804,16 @@ def _remember_project(root: Path) -> None:
         ProjectPaths.recent_projects().write_text(json.dumps(items[:12]), encoding="utf-8")
     except OSError:
         pass
+
+
+def _untrusted(root: Path) -> str | None:
+    """Why jobs will refuse to start in this project, when its configuration came with the
+    repository and has not been approved."""
+    try:
+        require_trust(root)
+    except UntrustedProject as e:
+        return str(e)
+    return None
 
 
 def _folder(path: str) -> Path:

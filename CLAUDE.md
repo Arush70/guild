@@ -43,6 +43,7 @@ src/guild/
   paths.py            ProjectPaths: every path under .guild/; PROTECTED_DIRS, CACHE_DIRS; atomic_write_text
   projectdocs.py      the project documents roles read, and their `guild init --docs` templates
   errors.py           Cancelled
+  trust.py            approval of .guild configuration that came with a repository (`guild trust`)
   agent.py            one role's tool-calling loop; extract_json; extract_text_tool_calls;
                       validates the final reply against schemas.py and asks for repairs (≤2)
   schemas.py          pydantic output contract per role/job (lenient coercions for small models)
@@ -52,6 +53,7 @@ src/guild/
   sandbox.py          LocalSandbox / DockerSandbox; secrets stripped from env
   tools/registry.py   file/search/shell/git/web tools; dispatch() → ToolResult(.ok)
   tools/context.py    Workspace (root scoping + ignore rules), ToolContext (+ a role's permissions)
+  tools/_regex_worker.py  the search tool's matching, as a process that can be killed
   tools/policy.py     security policy: read-only command allowlist, secret files, blocked URLs
   providers/          openai_compat (Ollama, Groq, Gemini, DeepSeek, OpenRouter, OmniRoute,
                       LiteLLM…), anthropic_provider, router (fallback chain + cost tracking),
@@ -65,7 +67,7 @@ src/guild/
 vscode-extension/     VS Code front end (ADR-014): extension.js + lib/{client,server,format}.js +
                       media/ (chat webview). No deps, no build. `npm test` (needs `guild` installed),
                       `npm run package` → .vsix. Talks only to the dashboard HTTP API.
-tests/                366 tests; FakeProvider in conftest.py scripts model replies, no API calls;
+tests/                373 tests; FakeProvider in conftest.py scripts model replies, no API calls;
                       test_robustness.py (schemas/repair/streaming), test_hardware.py (init wizard),
                       test_hardening*.py (2026-11-12 break-it audit: every test is an attack that worked),
                       test_pair.py (approval gate, modes, cancel, /api/pair, `guild pair`),

@@ -201,11 +201,11 @@ def build_profile(hw: Hardware, tier: str) -> dict:
         budget = 0
     elif tier == "lite":
         slots = {
-            "frontier": ["anthropic/claude-fable-5-1", "anthropic/claude-sonnet-5"]
+            "frontier": ["anthropic/claude-fable-5-2", "anthropic/claude-sonnet-5-5"]
             + free_cloud
             + local["frontier"],
             "coder": local["coder"] + ["deepseek/deepseek-chat"],
-            "coder_escalation": ["anthropic/claude-sonnet-5", "deepseek/deepseek-chat"],
+            "coder_escalation": ["anthropic/claude-sonnet-5-5", "deepseek/deepseek-chat"],
             "reasoner": ["deepseek/deepseek-reasoner"] + free_cloud + local["reasoner"],
             "cheap": (["gemini/gemini-2.5-flash"] if hw.keys.get("gemini") else [])
             + ["deepseek/deepseek-chat"]
@@ -221,11 +221,11 @@ def build_profile(hw: Hardware, tier: str) -> dict:
         budget = 15
     else:
         slots = {
-            "frontier": ["anthropic/claude-fable-5-1", "anthropic/claude-opus-5"],
-            "coder": ["anthropic/claude-opus-5", "anthropic/claude-sonnet-5", "openai/gpt-5"],
-            "coder_escalation": ["anthropic/claude-fable-5-1"],
-            "reasoner": ["openai/gpt-5", "gemini/gemini-2.5-pro", "anthropic/claude-sonnet-5"],
-            "cheap": ["gemini/gemini-2.5-flash", "openai/gpt-5-mini", "anthropic/claude-haiku-4-5"],
+            "frontier": ["anthropic/claude-fable-5-2", "anthropic/claude-opus-5-5"],
+            "coder": ["anthropic/claude-opus-5-5", "anthropic/claude-sonnet-5-5", "openai/gpt-5"],
+            "coder_escalation": ["anthropic/claude-fable-5-2"],
+            "reasoner": ["openai/gpt-5", "gemini/gemini-2.5-pro", "anthropic/claude-sonnet-5-5"],
+            "cheap": ["gemini/gemini-2.5-flash", "openai/gpt-5-mini", "anthropic/claude-haiku-5-5"],
         }
         limits = {
             "max_revision_rounds": 4,

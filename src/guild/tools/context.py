@@ -113,7 +113,10 @@ class ToolContext(Workspace):
     def check_write(self, rel: str) -> None:
         if self.readonly:
             raise PermissionError("this role is read-only")
-        parts = self.rel_parts(rel)
+        # the path as written is checked too: Windows cannot always resolve an alias such as
+        # ".git::$INDEX_ALLOCATION", but it can open it
+        written = re.split(r"[\\/]+", str(rel))
+        parts = self.rel_parts(rel) if not any(map(_is_protected, written)) else written
         if any(_is_protected(part) for part in parts):
             raise PermissionError(f"{rel} is inside a protected directory (.git / .guild)")
         if self.write_allowlist is not None:

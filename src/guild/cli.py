@@ -35,6 +35,8 @@ from .providers import AllProvidersFailed, BudgetExceeded
 from .providers.status import ollama_models, profile_status
 from .repo import Repo
 from .trace import read_trace, summarize
+from .trust import needs_trust
+from .trust import trust as trust_project
 from .workflow import PAIR_MODES, REVIEWERS, Guild, PairSession, TaskOutcome
 
 app = typer.Typer(
@@ -760,6 +762,42 @@ def cost(
         )
     console.print(t)
     console.print(f"estimated total: ${grand:.4f}  (≈ £{grand * 0.78:.2f})")
+
+
+@command
+def trust(
+    project: Path | None = typer.Option(None, "--project", "-C"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Trust without asking."),
+):
+    """Approve the guild configuration that came with this repository."""
+    root = find_project_root(project)
+    files = needs_trust(root)
+    if not files:
+        console.print("nothing to approve: no guild configuration came with this repository")
+        return
+    cfg = load_project_config(root)
+    console.print(
+        Panel(
+            "\n".join(
+                [
+                    "These files came with the repository and decide what guild does here:",
+                    *(f"  {escape(f)}" for f in files),
+                    "",
+                    f"test command:  {escape(cfg.test_command)}",
+                    f"lint command:  {escape(cfg.lint_command or '(none)')}",
+                    f"sandbox:       {escape(cfg.sandbox)}",
+                    f"profile:       {escape(cfg.profile)}",
+                    "",
+                    "guild runs these commands on this computer. Read the files first.",
+                ]
+            ),
+            title=escape(str(root)),
+        )
+    )
+    if not yes and not typer.confirm("Trust this configuration?", default=False):
+        raise typer.Exit(1)
+    trust_project(root)
+    console.print("[green]trusted[/green] — guild asks again if these files change")
 
 
 @command

@@ -36,9 +36,15 @@ class Provider(Protocol):
 # Anything not listed (local models, unknown) is costed at 0. Override in .guild/prices.yaml
 # (see load_prices below).
 DEFAULT_PRICES: dict[str, tuple[float, float]] = {
-    "anthropic/claude-fable-5-1": (15.0, 75.0),
-    "anthropic/claude-opus-5": (15.0, 75.0),
-    "anthropic/claude-sonnet-5": (3.0, 15.0),
+    # platform.claude.com/docs/en/models/overview, read 2026-11-12
+    "anthropic/claude-fable-5-2": (8.0, 40.0),
+    "anthropic/claude-opus-5-5": (4.0, 20.0),
+    "anthropic/claude-sonnet-5-5": (2.0, 10.0),
+    "anthropic/claude-haiku-5-5": (0.10, 0.50),  # listed as "from": the lowest tier
+    # earlier models, for configs that still name them
+    "anthropic/claude-fable-5-1": (10.0, 50.0),
+    "anthropic/claude-opus-5": (5.0, 25.0),
+    "anthropic/claude-sonnet-5": (2.0, 10.0),
     "anthropic/claude-haiku-4-5": (1.0, 5.0),
     "openai/gpt-5": (1.25, 10.0),
     "openai/gpt-5-mini": (0.25, 2.0),
@@ -48,6 +54,7 @@ DEFAULT_PRICES: dict[str, tuple[float, float]] = {
     "deepseek/deepseek-reasoner": (0.55, 2.19),
     "groq/llama-3.3-70b-versatile": (0.59, 0.79),
     "groq/llama-3.1-8b-instant": (0.05, 0.08),
+    "groq/deepseek-r1-distill-llama-70b": (0.75, 0.99),
 }
 
 

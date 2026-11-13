@@ -58,6 +58,13 @@ purpose, point `test_command` at something that runs.
 **`.guild/config.yaml: …` and nothing else** — that file (or a role/profile override) cannot
 be read; the message names the line or field. Fix it or delete it and run `guild init`.
 
+**"this repository brings its own guild configuration"** — `.guild/config.yaml` (or a role or
+profile file) is committed in this repository, so someone else may have written the commands
+in it. Read it, then run `guild trust` in the folder.
+
+**"search stopped after 20s"** — the regular expression backtracks without end (typically a
+repetition inside a repetition). Simplify the pattern or search a narrower path.
+
 **Costs** — `guild cost` sums *estimates* from list prices in `providers/router.py`. Your
 provider dashboard is the truth. Every profile has `max_usd_per_run`; the free profile is 0
 and refuses paid models even if a key is set.
