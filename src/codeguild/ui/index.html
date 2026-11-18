@@ -590,7 +590,8 @@ function renderSetup() {
   $('#cfgSandbox').value = c.sandbox || 'local';
   const box = $('#cfgRoles'); if (box.dataset.for === ROLES.join()) return;
   box.dataset.for = ROLES.join(); box.replaceChildren();
-  for (const r of ['engineer', 'verifier', 'critic', 'security', 'lead', 'docs']) {
+  const team = ['engineer', 'verifier', 'critic', 'security', 'performance', 'ux', 'data-quality', 'lead', 'docs'];
+  for (const r of team.filter(r => ROLES.includes(r) || (c.roles_enabled || []).includes(r))) {
     const l = el('label'); l.style.display = 'block'; const cb = el('input'); cb.type = 'checkbox'; cb.value = r; cb.checked = (c.roles_enabled || []).includes(r);
     l.append(cb, ' ' + r); box.append(l);
   }

@@ -133,7 +133,8 @@ as-is.
 | `codeguild plan "goal" [--context brief.md]` | Lead writes roadmap + tasks → `.codeguild/plan.json` |
 | `codeguild status` | show the plan and task states |
 | `codeguild run [T1 T3 ...] [--all] [-y] [--skip security,docs]` | implement task(s) through the full loop |
-| `codeguild review [--ref main] [--security-only]` | Critic + Security on the current diff, nothing else |
+| `codeguild review [--ref main] [--security-only]` | the enabled reviewers on the current diff, nothing else |
+| `codeguild bench [-n 3] [-p free] [--fixed-plan]` | measure the team on real models: build a small demo N times from scratch, merge, check with hidden tests, write a report |
 | `codeguild ask ROLE "question"` | ask one role (e.g. `researcher`, `security`) about the project |
 | `codeguild trust [-y]` | approve the `.codeguild` configuration that came with a cloned repository, after reading it |
 | `codeguild pair ["request"] [--mode ask\|auto-edits\|plan]` | pair-program in the terminal: an agent that edits your working tree and asks before every change |
@@ -173,14 +174,17 @@ proposed change opens in VS Code's diff editor.
 | **security** | reasoner | read, search, diff, shell (read-only) | secrets, injection, deps, privacy, CI/supply-chain |
 | **docs** | cheap | read, write (Markdown only) | README / CHANGELOG / docs after each accepted task |
 | **researcher** | cheap | read, search, web | "how should we do X?" with trade-offs and sources |
-| **performance** | reasoner | read, search, diff, shell (read-only) | complexity, N+1, memory, blocking I/O — via `ask` or `watch` |
+| **performance** | reasoner | read, search, diff, shell (read-only) | reviewer: complexity, N+1, memory, blocking I/O |
+| **ux** | reasoner | read, search, diff | reviewer: messages, errors, consistency, accessibility, CLI ergonomics |
+| **data-quality** | reasoner | read, search, diff, shell (read-only) | reviewer: missing values, silent row loss, units, train/test leakage |
 | **kaggle** | frontier | read, search, web | turns a competition brief into a baseline + CV + submission plan |
 | **assistant** | frontier | read, search, diff, tests | the chat: answers questions about the project in prose; read-only |
 
-Add your own: copy any `src/codeguild/data/roles/*.yaml` into `.codeguild/roles/`, edit the prompt,
-slot and tools, and add its name to `roles_enabled` in `.codeguild/config.yaml`. Ideas: a
-`performance` reviewer, a `ux` reviewer for front-end work, a `kaggle` role that reads the
-competition brief and proposes a baseline.
+Every task is reviewed by the reviewers listed in `roles_enabled` (`critic` and `security` by
+default). Add `performance`, `ux` or `data-quality` there to have them review too, each with its
+own verdict. Add your own role: copy any `src/codeguild/data/roles/*.yaml` into
+`.codeguild/roles/`, edit the prompt, slot and tools; give it a `review:` line to make it a
+reviewer (see `docs/ADDING_A_ROLE.md`).
 
 ## Profiles
 

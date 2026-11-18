@@ -10,6 +10,7 @@ slot: reasoner                # which profile slot fills this seat: frontier | c
 escalation_slot: null         # optional: slot to use after repeated failures (engineer uses coder_escalation)
 tools: [read_file, list_files, search, git_diff]   # least privilege; see tools/registry.py
 max_tool_calls: 25
+review: Review the change for the people who will use it.   # makes it a reviewer (see below)
 write_allowlist: null         # e.g. ["**/*.md"] to restrict writes; null = all (only if write tools are listed)
 description: >
   One paragraph shown in `codeguild roles`.
@@ -27,9 +28,11 @@ Rules of thumb:
   Unknown roles accept any JSON object.
 - **Least privilege.** Reviewers get read tools only. Only the engineer gets `write_file`,
   `edit_file`, `run_command`. Docs gets writes with a Markdown allowlist.
-- **Enable it.** Add the name to `roles_enabled` in `.codeguild/config.yaml` if it should run in
-  the task loop, or just use it with `codeguild ask <name> "..."`. Reviewer roles named in
-  `roles_enabled` are not automatically wired into `run_task` yet — the built-in reviewers
-  are `critic` and `security`; `performance` can be run with `codeguild ask performance "..."`
-  or `codeguild watch --roles critic,security,performance`.
+- **Make it a reviewer.** A role with a `review:` line is a reviewer: when its name is in
+  `roles_enabled` (`.codeguild/config.yaml`, or the dashboard's settings), it reviews every
+  task's change after the tests, and its verdict counts like the critic's — a
+  `request_changes` sends the engineer another round. Its reply is checked against the review
+  format (`verdict`, `findings`, `summary`) and repaired if needed. `codeguild review` runs all
+  enabled reviewers on the current diff. Without `review:`, use the role with
+  `codeguild ask <name> "..."`.
 - **Test it** with `FakeProvider` in `tests/` — no API calls in tests.

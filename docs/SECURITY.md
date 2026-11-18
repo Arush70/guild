@@ -9,7 +9,7 @@ the project, run destructive commands, or slip bad code into `main`.
 - All tool paths resolve inside the project root; `..` and absolute escapes are refused
   (`ToolContext.resolve`). Symlinks are resolved before the check.
 - Ignore rules hide `.git`, `.codeguild`, `.venv`, `node_modules` etc. from listing/search.
-- Reviewer roles (critic, security, performance, verifier, assistant) are read-only:
+- Reviewer roles (critic, security, performance, ux, data-quality, verifier, assistant) are read-only:
   no `write_file`/`edit_file`, and `run_command` refuses commands that look mutating.
 - The docs role may only write `*.md`.
 - No role can write into `.git/` (hooks and config are executed by git on the host) or

@@ -4,6 +4,7 @@ slot: reasoner
 tools: [read_file, list_files, search, git_diff, run_command]
 readonly: true
 max_tool_calls: 30
+review: Review the change for security and privacy.
 description: >
   Reviews changes for security and privacy issues: secrets, injection, unsafe deserialisation,
   dependency risk, data handling, permissions, and logging of personal data.

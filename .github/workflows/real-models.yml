@@ -1,0 +1,76 @@
+name: real-models
+# The team on a real local model (Ollama on the runner's CPU), every night and on demand.
+# It measures, it does not gate: a failed run is a finding to read in the report, not a red
+# build. The report and the traces are kept as an artifact of the run.
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Ollama model for every role
+        default: qwen2.5-coder:3b
+      runs:
+        description: how many fresh runs of the calculator demo
+        default: "1"
+      fixed_plan:
+        description: skip the lead's planning (true/false)
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    if: github.repository == 'Arush70/guild' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    env:
+      MODEL: ${{ inputs.model || 'qwen2.5-coder:3b' }}
+      RUNS: ${{ inputs.runs || '1' }}
+      FIXED: ${{ inputs.fixed_plan || 'false' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -e . pytest  # the demo project is tested with pytest
+      - name: Start Ollama and pull the model
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          (ollama serve > ollama.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf http://localhost:11434/api/version && break; sleep 2; done
+          ollama pull "$MODEL"
+      - name: Profile with that model in every role, $0 cap
+        run: |
+          mkdir -p ci/.codeguild/profiles
+          printf 'profile: ci\n' > ci/.codeguild/config.yaml
+          {
+            echo "name: ci"
+            echo "description: nightly bench on ${MODEL}"
+            echo "slots:"
+            for slot in frontier coder reasoner cheap; do echo "  ${slot}: [ollama/${MODEL}]"; done
+            echo "limits: {max_revision_rounds: 3, max_tool_calls_per_task: 60, max_usd_per_run: 0}"
+          } > ci/.codeguild/profiles/ci.yaml
+          git config --global user.name "codeguild bench"
+          git config --global user.email "bench@localhost"
+      - name: codeguild bench
+        continue-on-error: true
+        run: |
+          extra=""
+          if [ "$FIXED" = "true" ]; then extra="--fixed-plan"; fi
+          codeguild bench -C ci -p ci -n "$RUNS" --dir bench --timeout 150 $extra
+      - name: Report
+        if: always()
+        run: |
+          if [ -f bench/report.md ]; then cat bench/report.md >> "$GITHUB_STEP_SUMMARY"; \
+          else echo "no report: see the bench step's log" >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-${{ github.run_number }}
+          path: |
+            bench/report.md
+            bench/report.json
+            bench/run-*/.codeguild/runs/**
+            ollama.log
+          if-no-files-found: warn

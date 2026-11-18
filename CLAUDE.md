@@ -62,13 +62,15 @@ src/codeguild/
                       /api/fs folder picker, /api/files + /api/file browser, /api/chat, /api/plan/revise;
                       branch diff/merge/discard; run detail with per-role cost.  ui/index.html  the IDE-style dashboard, one file, no build step;
                       ui/vendor/monaco  monaco-editor's min/vs, unchanged (do not edit; do not lint)
-  data/roles/*.yaml   lead engineer critic security docs researcher performance kaggle assistant(chat, prose)
+  data/roles/*.yaml   lead engineer critic security docs researcher performance ux data-quality
+                      kaggle assistant(chat, prose); a role with `review:` is a reviewer
+  bench.py            `codeguild bench`: the calculator demo N times from scratch + hidden checks
   data/templates/*.md PRD/ARCHITECTURE/RULES/TASKS/MEMORY/DECISIONS scaffolds for `codeguild init --docs`
   data/profiles/*.yaml free lite pro (codeguild init writes a machine-specific override into .codeguild/profiles/)
 vscode-extension/     VS Code front end (ADR-014): extension.js + lib/{client,server,format}.js +
                       media/ (chat webview). No deps, no build. `npm test` (needs `codeguild` installed),
                       `npm run package` → .vsix. Talks only to the dashboard HTTP API.
-tests/                386 tests; FakeProvider in conftest.py scripts model replies, no API calls;
+tests/                397 tests; FakeProvider in conftest.py scripts model replies, no API calls;
                       test_robustness.py (schemas/repair/streaming), test_hardware.py (init wizard),
                       test_hardening*.py (2026-11-12 break-it audit: every test is an attack that worked),
                       test_pair.py (approval gate, modes, cancel, /api/pair, `codeguild pair`),
@@ -134,8 +136,8 @@ function to app.py and a test_multiply test in test_app.py") with the guards in 
    read the trace, tune prompts). Then the same on `lite`. Then on 2 more small projects.
 2. Publish to PyPI as `codeguild` (wheel builds clean: `python -m build`), tag v1.0.0 once (1) holds.
 3. Parallel engineers on independent tasks (per-task git worktrees).
-4. `ux` / `data-quality` reviewer roles; wire extra reviewers from `roles_enabled` into run_task.
-5. Optional CI job running the loop against a real Ollama.
+4. Done: `ux` / `data-quality` reviewers; any role with `review:` in `roles_enabled` reviews.
+5. Done: `.github/workflows/real-models.yml` runs `codeguild bench` on Ollama nightly.
 6. VS Code extension (the dashboard HTTP API is the integration point).
 Done in 0.2.0: streaming, trace viewer, diff/merge, init wizard, output validation, kaggle +
 performance roles, `codeguild watch`, GitHub Action, troubleshooting docs.

@@ -62,6 +62,12 @@ class Profile(BaseModel):
         return self.slots[slot]
 
 
+_BUILT_IN_REVIEWS = {
+    "critic": "Review the change.",
+    "security": "Review the change for security and privacy.",
+}
+
+
 class Role(BaseModel):
     name: str
     title: str
@@ -76,13 +82,22 @@ class Role(BaseModel):
     readonly: bool | None = None  # None = infer from tools/name (reviewers are read-only)
     description: str = ""
     system_prompt: str
+    # A reviewer: when this role is in roles_enabled, it reviews every task's change with this
+    # instruction, and its verdict decides together with the tests (critic, security,
+    # performance, ux, data-quality ship with one). review_phase names the step in the trace.
+    review: str | None = None
+    review_phase: str | None = None
 
     @model_validator(mode="after")
-    def _engineer_has_the_task_budget(self) -> Role:
-        # role files written before `task_budget` existed (a project's own engineer.yaml) do
-        # not have the line; the engineer always had the task budget
+    def _defaults_for_older_role_files(self) -> Role:
+        # role files written before these fields existed (a project's own engineer.yaml or
+        # critic.yaml) do not have the lines; keep what those roles always did
         if self.task_budget is None:
             self.task_budget = self.name == "engineer"
+        if self.review is None and self.name in _BUILT_IN_REVIEWS:
+            self.review = _BUILT_IN_REVIEWS[self.name]
+        if self.review and not self.review_phase:
+            self.review_phase = "critique" if self.name == "critic" else self.name
         return self
 
 

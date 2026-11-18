@@ -4,6 +4,7 @@ slot: reasoner
 tools: [read_file, list_files, search, git_diff, run_command]
 readonly: true
 max_tool_calls: 25
+review: Review the change for performance problems that matter at this project's scale.
 description: >
   Reviews a change for performance problems: algorithmic complexity, N+1 queries, repeated
   I/O, unbounded memory, missing indexes, blocking calls in async code, and needless work in

@@ -49,8 +49,8 @@ Environment: owner's laptop, Ollama, free profile written by `codeguild init`.
 | R2 | plan "Add multiply(a,b) to app.py + test_multiply" | 1 task, no Plan-check warnings |
 | R3 | run next task | engineer writes files (tool_call events with `write_file`/`edit_file`), tests PASS, critic+security approve, lead ACCEPT, branch created |
 | R4 | diff → merge | main has multiply + test; branch deleted |
-| R5 | plan "build a calculator" → run all | 4/4 accepted, each merged; total < 30 min |
-| R6 | repeat R5 from a fresh folder ×3 | 3/3 |
+| R5 | `codeguild bench -n 1` (plan "build a calculator" → run all → merge) | 4/4 accepted and merged, tests and hidden checks pass; total < 30 min |
+| R6 | `codeguild bench -n 3` (R5 from a fresh folder ×3) | 3/3; send `report.md` and the traces |
 | R7 | lite profile with ANTHROPIC_API_KEY | R3 passes; `codeguild cost` ≤ cap; Lead is Claude in trace |
 | R8 | chat: "what does app.py do?" | trace shows `list_files`/`read_file` before the answer; answer cites the file |
 | R9 | `codeguild watch --once` on Demo | critic + security print verdicts |

@@ -163,3 +163,16 @@
 - CI runs on Windows too (pytest and the VS Code extension tests), on pushes to `main` and on
   pull requests.
 
+## Unreleased (after 0.3.0)
+- `codeguild bench`: the Phase 1 check as one command. Builds the calculator demo in a fresh
+  folder N times; the lead plans, every task is implemented, reviewed and merged, then hidden
+  checks the agents never saw test the result. Writes `report.md` and `report.json` with time,
+  tokens, cost and why anything failed. `--fixed-plan` skips the lead's planning.
+- Nightly `real-models` workflow: `codeguild bench` on a real Ollama model on GitHub's runners
+  (also on demand, with a model of your choice). It measures and never fails the build; the
+  report is on the run's summary page, the traces in its artifact.
+- Reviewers are configurable: a role with a `review:` line reviews every task when it is in
+  `roles_enabled`. New `ux` and `data-quality` reviewers; `performance` can now review in the
+  task loop. Every reviewer's reply is checked and repaired as a review, a project's own too.
+- Windows CI is green: new files keep the line endings the model wrote.
+

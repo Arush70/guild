@@ -23,7 +23,7 @@ from typing import Any
 
 from . import projectdocs
 from .agent import Agent, AgentResult
-from .config import Profile, ProjectConfig, Role, load_role
+from .config import ConfigError, Profile, ProjectConfig, Role, load_role
 from .errors import Cancelled
 from .paths import ProjectLock, ProjectPaths
 from .plan import Plan, PlanStore, Task
@@ -31,6 +31,7 @@ from .providers import CostTracker, Message, Router
 from .providers.router import load_prices
 from .repo import OWN_PREFIXES, Repo, TaskBranch, files_in_diff
 from .sandbox import make_sandbox
+from .schemas import CODE_REVIEW
 from .tools import REGISTRY, ToolContext, Workspace
 from .trace import Trace, new_run_id
 from .trust import require_trust
@@ -38,7 +39,9 @@ from .verify import Verification, Verifier
 
 # Roles that must never change the project, even when a project overrides their YAML and leaves
 # out `readonly: true`.
-READONLY_ROLES = frozenset({"critic", "security", "verifier", "assistant", "performance"})
+READONLY_ROLES = frozenset(
+    {"critic", "security", "verifier", "assistant", "performance", "ux", "data-quality"}
+)
 
 # Interactive pair programming: what needs the owner's approval.
 PAIR_MODES = {
@@ -51,10 +54,9 @@ PAIR_MODES = {
 
 
 # Reviewer roles of the task loop: role -> (phase name in the trace, instruction).
-REVIEWERS = {
-    "critic": ("critique", "Review the change."),
-    "security": ("security", "Review the change for security and privacy."),
-}
+# Always present in a task's result for the front ends (None when that reviewer is off).
+# Any other role with a `review:` instruction reviews too when it is in roles_enabled.
+DEFAULT_REVIEWERS = ("critic", "security")
 
 
 class PairSession:
@@ -101,7 +103,7 @@ class TaskOutcome:
         """The shape sent to front ends and stored in job results: one key per reviewer
         (None when that reviewer did not run)."""
         d = {f.name: getattr(self, f.name) for f in fields(self) if f.name != "reviews"}
-        return {**d, **{name: self.reviews.get(name) for name in REVIEWERS}}
+        return {**d, **dict.fromkeys(DEFAULT_REVIEWERS), **self.reviews}
 
 
 Reporter = Callable[[str, str], None]  # (level, message)
@@ -423,8 +425,7 @@ class Guild:
             }
             reviews = {
                 role: self._review(role, review_ctx, task, rounds)
-                for role in REVIEWERS
-                if role in enabled
+                for role in self.reviewers(enabled)
             }
 
             tests_ok = verification is None or verification.passed
@@ -458,7 +459,10 @@ class Guild:
                     "Task": task_brief,
                     "Diff": branch.review_diff()[:30000],
                     "Verification": json.dumps(asdict(verification) if verification else None),
-                    **{name.title(): json.dumps(reviews.get(name)) for name in REVIEWERS},
+                    **{
+                        name.title(): json.dumps(reviews.get(name))
+                        for name in self.reviewers(enabled)
+                    },
                 },
                 job="review",
             )
@@ -587,10 +591,23 @@ class Guild:
             eng["pushed_back"] = True
         return eng
 
+    def reviewers(self, enabled: list[str] | set[str]) -> list[str]:
+        """The enabled roles that review a task's change, in the order of roles_enabled: those
+        whose role file has a `review:` instruction."""
+        order = self.cfg.roles_enabled
+        names = sorted(set(enabled), key=lambda r: order.index(r) if r in order else len(order))
+        return [name for name in names if self._reviews(name)]
+
+    def _reviews(self, name: str) -> bool:
+        try:
+            return bool(self.role(name).review)
+        except (FileNotFoundError, ConfigError):
+            return False  # no such role: nothing reviews under that name
+
     def _review(self, role: str, context: dict[str, str], task: Task, rounds: int) -> dict:
-        phase, prompt = REVIEWERS[role]
-        self._phase(phase, role, task_id=task.id, round=rounds)
-        review = self.agent(role).run(prompt, context_blocks=context).data
+        spec = self.role(role)
+        self._phase(spec.review_phase or role, role, task_id=task.id, round=rounds)
+        review = self.agent(role).run(spec.review, context_blocks=context, job=CODE_REVIEW).data
         if review is None:
             # parse and repairs failed: silence is never an approval
             self._warn(f"{role} returned no valid JSON; treating as changes requested", role=role)

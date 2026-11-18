@@ -239,6 +239,8 @@ SCHEMAS: dict[str, dict[str, type[BaseModel]]] = {
     "critic": {"default": ReviewOutput},
     "security": {"default": ReviewOutput},
     "performance": {"default": ReviewOutput},
+    "ux": {"default": ReviewOutput},
+    "data-quality": {"default": ReviewOutput},
     "verifier": {"default": VerifierOutput},
     "docs": {"default": DocsOutput},
     "researcher": {"default": ResearchOutput},
@@ -247,7 +249,14 @@ SCHEMAS: dict[str, dict[str, type[BaseModel]]] = {
 }
 
 
+# The job of every reviewer, built in or a project's own: its reply is a review, whatever the
+# role is called.
+CODE_REVIEW = "code_review"
+
+
 def schema_for(role: str, job: str = "default") -> type[BaseModel] | None:
+    if job == CODE_REVIEW:
+        return ReviewOutput
     by_job = SCHEMAS.get(role)
     if not by_job:
         return None

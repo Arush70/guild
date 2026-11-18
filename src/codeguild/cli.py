@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import json
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -34,10 +35,11 @@ from .plan import Plan, PlanError, PlanStore, Task
 from .providers import AllProvidersFailed, BudgetExceeded
 from .providers.status import ollama_models, profile_status
 from .repo import Repo
+from .schemas import CODE_REVIEW
 from .trace import read_trace, summarize
 from .trust import needs_trust, shipped_config
 from .trust import trust as trust_project
-from .workflow import PAIR_MODES, REVIEWERS, Guild, PairSession, TaskOutcome
+from .workflow import PAIR_MODES, Guild, PairSession, TaskOutcome
 
 app = typer.Typer(
     help="A budget-aware multi-agent coding team.", no_args_is_help=True, rich_markup_mode="rich"
@@ -479,7 +481,7 @@ def run(
     yes: bool = typer.Option(False, "--yes", "-y", help="don't pause between tasks"),
     skip: str = typer.Option("", help="comma-separated roles to skip, e.g. security,docs"),
 ):
-    """Implement task(s) from the plan: engineer → verify → critic/security → lead → docs."""
+    """Implement task(s) from the plan: engineer → verify → reviewers → lead → docs."""
     root, cfg, prof = _load(project, profile)
     plan_ = _load_plan(root)
     if plan_ is None:
@@ -710,18 +712,20 @@ def review(
     ref: str = typer.Option("HEAD", help="diff against this ref (e.g. main)"),
     security_only: bool = typer.Option(False),
 ):
-    """Run Critic and Security on the current diff without implementing anything."""
+    """Run the project's reviewers (critic, security, …) on the current diff."""
     root, cfg, prof = _load(project, profile)
     diff = None if ref.startswith("-") else Repo(root).diff(ref)
     if diff is None:
         err.print(f"[red]cannot diff against {escape(ref)}: not a branch, tag or commit[/red]")
         raise typer.Exit(2)
-    reviewers = ["security"] if security_only else list(REVIEWERS)
     g = _guild(root, cfg, prof)
+    reviewers = ["security"] if security_only else g.reviewers(cfg.roles_enabled)
     try:
         results = {
             r: g.agent(r).run(
-                REVIEWERS[r][1], context_blocks={"Diff": (diff or "(no diff)")[:30000]}
+                g.role(r).review,
+                context_blocks={"Diff": (diff or "(no diff)")[:30000]},
+                job=CODE_REVIEW,
             )
             for r in reviewers
         }
@@ -771,6 +775,74 @@ def cost(
         )
     console.print(t)
     console.print(f"estimated total: ${grand:.4f}  (≈ £{grand * 0.78:.2f})")
+
+
+@command
+def bench(
+    runs: int = typer.Option(3, "--runs", "-n", min=1, max=20, help="how many fresh runs"),
+    project: Path | None = typer.Option(
+        None, "--project", "-C", help="take the profile from this project (default: here)"
+    ),
+    profile: str | None = typer.Option(None, "--profile", "-p", help="profile to measure"),
+    fixed_plan: bool = typer.Option(
+        False, "--fixed-plan", help="skip the lead's planning: use the same 4 tasks every time"
+    ),
+    out: Path | None = typer.Option(None, "--dir", help="where to put the runs and the report"),
+    minutes: int = typer.Option(60, "--timeout", help="stop one run after this many minutes"),
+):
+    """Measure the team on real models: build the calculator demo N times from scratch.
+
+    Each run starts from an empty folder: the lead plans, every task is implemented,
+    reviewed and merged, then hidden checks test the result. Writes report.md and
+    report.json; send those with the traces it lists.
+    """
+    from . import bench as benchmod
+
+    root = find_project_root(project)
+    try:
+        cfg = load_project_config(root) if ProjectPaths(root).initialised else ProjectConfig()
+        prof = load_profile(profile or cfg.profile, root)
+    except (FileNotFoundError, ValueError) as e:
+        err.print(f"[red]{escape(_reason(e))}[/red]")
+        raise typer.Exit(2) from None
+    folder = (out or Path.cwd() / f"codeguild-bench-{time.strftime('%Y%m%d-%H%M%S')}").resolve()
+    if folder.exists() and any(folder.iterdir()):
+        err.print(f"[red]{escape(str(folder))} is not empty; pick another --dir[/red]")
+        raise typer.Exit(2)
+    console.print(
+        f"[bold]bench[/bold] {runs} run(s) of the calculator demo with profile "
+        f"[bold]{escape(prof.name)}[/bold]{' (fixed plan)' if fixed_plan else ''} in "
+        f"{escape(str(folder))}"
+    )
+    results = []
+    for i in range(1, runs + 1):
+        console.rule(f"run {i}/{runs}")
+        r = benchmod.bench_once(
+            i,
+            folder / f"run-{i}",
+            prof,
+            fixed_plan=fixed_plan,
+            test_command=f'"{sys.executable}" -m pytest -q -p no:cacheprovider',
+            timeout_s=minutes * 60,
+            report=_report,
+        )
+        results.append(r)
+        console.print(
+            f"run {i}: {'[green]pass[/green]' if r.passed else '[red]FAIL[/red]'} — "
+            f"{sum(t.accepted and t.merged for t in r.tasks)}/{len(r.tasks)} tasks merged, "
+            f"hidden checks {sum(r.acceptance.values())}/{len(r.acceptance)}, "
+            f"{r.wall_s / 60:.1f} min, ${r.usd:.4f}" + (f" — {escape(r.error)}" if r.error else "")
+        )
+    report = benchmod.write_report(results, folder, prof)
+    passed = sum(r.passed for r in results)
+    console.print(
+        Panel(
+            f"{passed}/{runs} runs passed\nreport: {escape(str(report))}",
+            title="codeguild bench",
+            border_style="green" if passed == runs else "red",
+        )
+    )
+    raise typer.Exit(0 if passed == runs else 1)
 
 
 @command

@@ -4,6 +4,8 @@ slot: reasoner
 tools: [read_file, list_files, search, git_diff]
 readonly: true
 max_tool_calls: 25
+review: Review the change.
+review_phase: critique
 description: >
   Adversarial reviewer. Looks for bugs, edge cases, unclear code, missing tests and
   over-engineering. Does not fix anything; reports findings with severity.
