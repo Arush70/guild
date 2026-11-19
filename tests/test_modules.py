@@ -273,3 +273,33 @@ def test_workspace_scopes_paths_and_skips_ignored_files(tmp_path: Path):
     assert [rel for rel, _ in ws.walk(tmp_path)] == [str(Path("src") / "a.py")]
     assert "big.js" not in ws.listing() and "a.py" in ws.listing()
     assert ws.listing("src/a.py").startswith("not a directory")
+
+
+def test_merging_works_on_a_machine_without_a_git_identity(repo: Repo, monkeypatch, tmp_path):
+    """A fresh git install (or a CI runner) has no user.name/user.email. The merge commit falls
+    back to codeguild's identity, as task commits do, instead of failing."""
+    root = repo.root
+    base = repo.current_branch()
+    _git(root, "checkout", "-q", "-b", "codeguild/t1-x")
+    (root / "new.py").write_text("x = 1\n")
+    repo.commit_all("task")
+    _git(root, "checkout", "-q", base)
+    for key in ("user.name", "user.email"):
+        subprocess.run(["git", "config", "--unset", key], cwd=root)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "no-global-config"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for var in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.delenv(var, raising=False)
+    merged = repo.merge_branch("codeguild/t1-x", base)
+    assert merged["ok"], merged
+    assert (root / "new.py").exists()
+    assert _git(root, "log", "-1", "--format=%ae").strip() == "codeguild@localhost"
+
+
+def test_python_dash_m_codeguild_runs_the_cli():
+    import sys
+
+    res = subprocess.run(
+        [sys.executable, "-m", "codeguild", "--help"], capture_output=True, text=True, timeout=60
+    )
+    assert res.returncode == 0 and "bench" in res.stdout and "codeguild" in res.stdout

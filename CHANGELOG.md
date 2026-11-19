@@ -175,4 +175,7 @@
   `roles_enabled`. New `ux` and `data-quality` reviewers; `performance` can now review in the
   task loop. Every reviewer's reply is checked and repaired as a review, a project's own too.
 - Windows CI is green: new files keep the line endings the model wrote.
+- Fix: merging a task's branch failed on a machine with no git name/email configured (a
+  fresh git install, or a CI runner). Merges now fall back to the `codeguild` identity, as
+  task commits already did.
 

@@ -24,6 +24,12 @@ _NOT_CACHES = (
     *(f":(exclude,glob){pre}{d}/**" for d in CACHE_DIRS for pre in ("**/", "")),
     ":(exclude)*.pyc",
 )
+# Used only when git has no user.name/user.email at all, so an accepted task is not lost.
+_FALLBACK_IDENTITY = ("-c", "user.name=codeguild", "-c", "user.email=codeguild@localhost")
+_NO_IDENTITY_HINT = (
+    "git has no user.name/user.email; committed as 'codeguild'. Set them with: "
+    'git config --global user.name "You" && git config --global user.email "you@example.com"'
+)
 _NO_IDENTITY_RX = re.compile(r"tell me who you are|auto-detect email|empty ident")
 _NEW_FILE_BYTES = 20_000
 
@@ -173,15 +179,9 @@ class Repo:
         if _NO_IDENTITY_RX.search(out):
             # A fresh git install has no user.name/user.email. Commit as "codeguild" rather than
             # leave an accepted task with an empty branch.
-            identity = ("-c", "user.name=codeguild", "-c", "user.email=codeguild@localhost")
-            rc, out = self.run(*identity, "commit", "-q", "-m", message)
+            rc, out = self.run(*_FALLBACK_IDENTITY, "commit", "-q", "-m", message)
             if rc == 0:
-                return CommitResult(
-                    True,
-                    warning="git has no user.name/user.email; committed as 'codeguild'. Set them "
-                    'with: git config --global user.name "You" && '
-                    'git config --global user.email "you@example.com"',
-                )
+                return CommitResult(True, warning=_NO_IDENTITY_HINT)
         return CommitResult(False, error=out)
 
     # ------------------------------------------------------------------ branches, for the owner
@@ -256,7 +256,12 @@ class Repo:
         rc, out = self.run("checkout", "-q", base)
         if rc != 0:
             return {"ok": False, "error": f"could not switch to {base}:\n{out}"}
-        rc, out = self.run("merge", "--no-ff", "-q", "-m", f"Merge {branch} (codeguild)", branch)
+        merge = ("merge", "--no-ff", "-q", "-m", f"Merge {branch} (codeguild)", branch)
+        rc, out = self.run(*merge)
+        if rc != 0 and _NO_IDENTITY_RX.search(out):
+            # the merge commit needs an author too: same fallback as commit_all
+            self.run("merge", "--abort")
+            rc, out = self.run(*_FALLBACK_IDENTITY, *merge)
         if "CONFLICT" in out or self.out("ls-files", "-u"):
             self.run("merge", "--abort")
             return {"ok": False, "error": f"merge conflict; resolve manually:\n{out}"}
