@@ -60,6 +60,8 @@ review the diff → commit → tick here and update `docs/MEMORY.md`.
 - [ ] TASK-031 Pair/chat context: `@path` attaches files; keep tool results across turns (today
       only the text of earlier turns is replayed); compact long histories with the cheap slot.
 - [ ] TASK-034 Slash commands (`.codeguild/commands/<name>.md`) and write hooks.
+- [x] TASK-047 A model per role in any profile, own profiles for all projects, team on/off per
+      role: `codeguild team`, `codeguild profile`, dashboard Team and models (ADR-023).
 - [x] TASK-046 Close the audit's open items: regex timeout, `codeguild trust`, pinned web_fetch,
       model ids, Windows CI (2026-11-13, ADR-020). Owner: check the first Windows CI run.
 - [x] TASK-045 Break-it audit 2 after the refactor (2026-11-12, docs/MEMORY.md, ADR-018/019).

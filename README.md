@@ -140,6 +140,8 @@ as-is.
 | `codeguild pair ["request"] [--mode ask\|auto-edits\|plan]` | pair-program in the terminal: an agent that edits your working tree and asks before every change |
 | `codeguild cost` | token + estimated cost table from saved traces |
 | `codeguild roles` | list roles and profiles (built-in + project overrides) |
+| `codeguild team [add\|remove ROLE…]` | who takes part in each task, and which model plays each role |
+| `codeguild profile list\|show\|new\|use\|set\|unset` | your own profiles; a model (or several) per role |
 | `codeguild ui [--port 7331]` | local IDE-style dashboard: files, editor, task diffs, approvals, chat |
 | `codeguild watch [--roles critic,security,performance] [--once]` | review every new commit as it lands |
 
@@ -186,13 +188,53 @@ own verdict. Add your own role: copy any `src/codeguild/data/roles/*.yaml` into
 `.codeguild/roles/`, edit the prompt, slot and tools; give it a `review:` line to make it a
 reviewer (see `docs/ADDING_A_ROLE.md`).
 
+## Your team and your models
+
+Two choices, and both work with every profile:
+
+- **Who is on the team** — which roles take part in each task. The engineer is always on;
+  lead, verifier (your tests), critic, security, docs, and the extra reviewers performance,
+  ux and data-quality can each be switched on or off. This is kept per project.
+- **Which model plays each role** — by default a role uses its profile slot (below). Give
+  any role its own model, or several tried in order, in any profile: the built-in ones
+  (copied into the project the first time you change them) or a profile of your own, kept
+  for one project or for all your projects.
+
+In the dashboard: **Team and settings** (gear icon) → **Team and models**. Tick the roles, type
+models (suggestions include everything Ollama has downloaded), then **Save**, or **Save as new
+profile** with a name. From a terminal:
+
+```bash
+codeguild team                                   # who is on the team, and their models
+codeguild team add ux performance                # more reviewers
+codeguild team remove docs
+codeguild profile new my-team --from free --all-projects   # your own profile, used everywhere
+codeguild profile set engineer ollama/qwen2.5-coder:14b ollama/qwen2.5-coder:7b
+codeguild profile set critic anthropic/claude-sonnet-5-5   # a different family for review
+codeguild profile unset critic                   # back to the profile's default
+codeguild profile list | show | use NAME
+```
+
+In the file, a role's own models sit next to the slots:
+
+```yaml
+name: my-team
+slots: { ... }                 # defaults, as below
+roles:
+  engineer: [ollama/qwen2.5-coder:14b, ollama/qwen2.5-coder:7b]
+  critic:   [anthropic/claude-sonnet-5-5]
+```
+
+Profiles are looked for in this order: the project's `.codeguild/profiles/`, then yours in
+`~/.codeguild/profiles/` (every project), then the built-in ones.
+
 ## Profiles
 
 A profile maps abstract **slots** to a fallback chain of concrete models:
 
 ```yaml
 slots:
-  frontier: [anthropic/claude-fable-5-1, anthropic/claude-sonnet-5, ollama/qwen3-coder:30b]
+  frontier: [anthropic/claude-fable-5-2, anthropic/claude-sonnet-5-5, ollama/qwen3-coder:30b]
   coder:    [ollama/qwen3-coder:30b, ollama/qwen2.5-coder:7b, deepseek/deepseek-chat]
   reasoner: [deepseek/deepseek-reasoner, gemini/gemini-2.5-flash]
   cheap:    [gemini/gemini-2.5-flash, ollama/qwen2.5-coder:7b]
@@ -204,7 +246,8 @@ limits:
 
 Model ids are `provider/model`. Providers: `ollama`, `anthropic`, `openai`, `groq`, `gemini`,
 `deepseek`, `openrouter`, `mistral`, `omniroute`, `litellm`, `custom` (set
-`CUSTOM_OPENAI_BASE_URL`). Copy a profile into `.codeguild/profiles/` to customise it.
+`CUSTOM_OPENAI_BASE_URL`). To change models for one role, see "Your team and your models"
+above; to change a whole slot, copy a profile into `.codeguild/profiles/` and edit it.
 
 Prices used for estimates live in `src/codeguild/providers/router.py` (`DEFAULT_PRICES`);
 local models cost 0. They are list-price approximations — check your provider's dashboard

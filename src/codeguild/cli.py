@@ -19,6 +19,7 @@ from rich.table import Table
 
 from . import __version__, projectdocs
 from . import hardware as hwmod
+from . import team as teammod
 from .config import (
     ConfigError,
     ProjectConfig,
@@ -28,6 +29,7 @@ from .config import (
     load_project_config,
     load_role,
     save_project_config,
+    where_defined,
 )
 from .errors import Cancelled
 from .paths import CACHE_DIRS, ProjectBusy, ProjectPaths
@@ -48,9 +50,9 @@ console = Console()
 err = Console(stderr=True)
 
 
-def command(fn):
-    """Register a CLI command. A config, profile, role or plan file that cannot be used ends
-    the command with one line naming the file, not a traceback."""
+def _friendly(fn):
+    """A config, profile, role or plan file that cannot be used ends the command with one
+    line naming the problem, not a traceback."""
 
     @functools.wraps(fn)
     def run(*args, **kwargs):
@@ -60,7 +62,12 @@ def command(fn):
             err.print(f"[red]{escape(str(e))}[/red]")
             raise typer.Exit(2) from None
 
-    return app.command()(run)
+    return run
+
+
+def command(fn):
+    """Register a CLI command (see _friendly)."""
+    return app.command()(_friendly(fn))
 
 
 def _report(level: str, msg: str) -> None:
@@ -369,7 +376,7 @@ def doctor(
         "recommended local models for this machine: "
         + ", ".join(dict.fromkeys(m for c in rec.values() for m in c[:1]))
     )
-    pulls = hwmod.missing_pulls(prof.slots, hw) if hw.ollama_reachable else []
+    pulls = hwmod.missing_pulls(prof.all_chains(), hw) if hw.ollama_reachable else []
     if pulls:
         console.print(
             "[yellow]not pulled yet:[/yellow] " + "  ".join(f"ollama pull {m}" for m in pulls[:4])
@@ -879,6 +886,223 @@ def trust(
         raise typer.Exit(1)
     trust_project(root)
     console.print("[green]trusted[/green]")
+
+
+# ---------------------------------------------------------------------- team and profiles
+team_app = typer.Typer(
+    help="Who is on the team: add or remove roles. `codeguild team` shows it.",
+    invoke_without_command=True,
+)
+profile_app = typer.Typer(
+    help="Profiles: which model plays each role. Make your own, pick models per role.",
+    no_args_is_help=True,
+)
+app.add_typer(team_app, name="team")
+app.add_typer(profile_app, name="profile")
+PROJECT = typer.Option(None, "--project", "-C", help="the project (default: here)")
+
+
+def _project(project: Path | None) -> tuple[Path, ProjectConfig]:
+    root = find_project_root(project)
+    if not ProjectPaths(root).initialised:
+        raise ConfigError(f"{root} is not set up for codeguild yet: run `codeguild init` there")
+    return root, load_project_config(root)
+
+
+def _show_team(root: Path, cfg: ProjectConfig, prof) -> None:
+    t = Table(title=f"team of {root.name} — profile {prof.name}")
+    t.add_column("role")
+    t.add_column("on team")
+    t.add_column("what it does")
+    t.add_column("model(s), first one is tried first")
+    for r in teammod.roles(root, cfg, prof):
+        on = (
+            "[dim]on demand[/dim]"
+            if r.on_team is None
+            else ("yes" if r.on_team else "[dim]no[/dim]")
+        )
+        if not r.uses_models:
+            models = "[dim]—[/dim]"
+        elif r.own_models:
+            models = escape(", ".join(r.models)) + " [cyan](own)[/cyan]"
+        else:
+            models = (
+                escape(", ".join(r.models) or f"(profile has no slot {r.slot})")
+                + f" [dim]({r.slot})[/dim]"
+            )
+        t.add_row(r.name + (" *" if r.required else ""), on, escape(r.part), models)
+    console.print(t)
+    console.print(
+        "[dim]* always on. Change the team: codeguild team add ux / codeguild team remove docs. "
+        "Change a model: codeguild profile set engineer ollama/qwen2.5-coder:14b[/dim]"
+    )
+
+
+@team_app.callback()
+@_friendly
+def team(ctx: typer.Context, project: Path | None = PROJECT):
+    """Show the team: who takes part in each task, and which model plays each role."""
+    if ctx.invoked_subcommand is None:
+        root, cfg = _project(project)
+        _show_team(root, cfg, load_profile(cfg.profile, root))
+
+
+@team_app.command("add")
+@_friendly
+def team_add(
+    names: list[str] = typer.Argument(..., help="roles to put on the team"),
+    project: Path | None = PROJECT,
+):
+    """Put roles on the team (for example a reviewer: performance, ux, data-quality)."""
+    root, cfg = _project(project)
+    cfg = teammod.set_team(cfg, root, [*cfg.roles_enabled, *names])
+    save_project_config(root, cfg)
+    _show_team(root, cfg, load_profile(cfg.profile, root))
+
+
+@team_app.command("remove")
+@_friendly
+def team_remove(
+    names: list[str] = typer.Argument(..., help="roles to take off the team"),
+    project: Path | None = PROJECT,
+):
+    """Take roles off the team. The engineer always stays."""
+    root, cfg = _project(project)
+    unknown = [n for n in names if n not in cfg.roles_enabled]
+    if unknown:
+        raise ConfigError(f"not on the team: {', '.join(unknown)}")
+    cfg = teammod.set_team(cfg, root, [n for n in cfg.roles_enabled if n not in names])
+    save_project_config(root, cfg)
+    _show_team(root, cfg, load_profile(cfg.profile, root))
+
+
+def _save_where_it_lives(prof, root: Path) -> str:
+    path, scope = teammod.save_edited(prof, root)
+    return f"saved {path}" + (" (for all your projects)" if scope == "user" else "")
+
+
+@profile_app.command("list")
+@_friendly
+def profile_list(project: Path | None = PROJECT):
+    """The profiles this project can use, and where each one is defined."""
+    root = find_project_root(project)
+    current = load_project_config(root).profile if ProjectPaths(root).initialised else None
+    t = Table()
+    t.add_column("profile")
+    t.add_column("defined")
+    t.add_column("description")
+    for name in list_available("profiles", root):
+        where = where_defined("profiles", name, root)
+        try:
+            desc = load_profile(name, root).description
+        except ConfigError as e:
+            desc = f"[red]{escape(str(e))}[/red]"
+        mark = " [green](in use)[/green]" if name == current else ""
+        label = {"project": "this project", "user": "your profiles (all projects)"}.get(
+            where, where
+        )
+        t.add_row(escape(name) + mark, label, escape(desc or ""))
+    console.print(t)
+
+
+@profile_app.command("show")
+@_friendly
+def profile_show(
+    name: str | None = typer.Argument(None, help="default: the project's"),
+    project: Path | None = PROJECT,
+):
+    """Every slot and every role's own models in a profile."""
+    root = find_project_root(project)
+    cfg = load_project_config(root) if ProjectPaths(root).initialised else ProjectConfig()
+    prof = load_profile(name or cfg.profile, root)
+    t = Table(title=f"profile {prof.name} ({where_defined('profiles', prof.name, root)})")
+    t.add_column("used by")
+    t.add_column("models, in the order they are tried")
+    for slot, chain in prof.slots.items():
+        t.add_row(f"slot {slot}", escape(", ".join(chain)))
+    for role, chain in prof.roles.items():
+        t.add_row(f"[cyan]role {role}[/cyan]", escape(", ".join(chain)))
+    console.print(t)
+    lim = prof.limits
+    console.print(
+        f"spending cap per run: ${lim.max_usd_per_run:g}, "
+        f"review rounds: {lim.max_revision_rounds}, "
+        f"tool calls per task: {lim.max_tool_calls_per_task}"
+    )
+
+
+@profile_app.command("new")
+@_friendly
+def profile_new(
+    name: str = typer.Argument(..., help="lowercase letters, digits, - and _"),
+    base: str = typer.Option("free", "--from", help="profile to start from"),
+    everywhere: bool = typer.Option(
+        False, "--all-projects", help="save it for all your projects (~/.codeguild/profiles)"
+    ),
+    use: bool = typer.Option(True, "--use/--no-use", help="switch this project to it"),
+    project: Path | None = PROJECT,
+):
+    """Make your own profile, starting as a copy of another. Then pick models per role."""
+    root = find_project_root(project)
+    if not everywhere and not ProjectPaths(root).initialised:
+        raise ConfigError(
+            f"{root} is not set up for codeguild: run `codeguild init`, or use --all-projects"
+        )
+    prof = load_profile(base, root)
+    prof = prof.model_copy(update={"description": f"own profile, started from {base}"})
+    path = teammod.save_new(prof, name, "user" if everywhere else "project", root)
+    console.print(f"[green]created[/green] {escape(str(path))}")
+    if use and ProjectPaths(root).initialised:
+        cfg = load_project_config(root)
+        cfg.profile = name
+        save_project_config(root, cfg)
+        console.print(f"this project now uses profile [bold]{escape(name)}[/bold]")
+    console.print(
+        "next: codeguild profile set engineer ollama/qwen2.5-coder:14b  (any role, any model)"
+    )
+
+
+@profile_app.command("use")
+@_friendly
+def profile_use(name: str = typer.Argument(...), project: Path | None = PROJECT):
+    """Switch this project to another profile."""
+    root, cfg = _project(project)
+    load_profile(name, root)  # exists and is valid
+    cfg.profile = name
+    save_project_config(root, cfg)
+    console.print(f"this project now uses profile [bold]{escape(name)}[/bold]")
+
+
+@profile_app.command("set")
+@_friendly
+def profile_set(
+    role: str = typer.Argument(..., help="the role, e.g. engineer, critic, lead"),
+    models: list[str] = typer.Argument(..., help="one or more models, tried in this order"),
+    name: str | None = typer.Option(None, "--profile", "-p", help="default: the project's"),
+    project: Path | None = PROJECT,
+):
+    """Give a role its own model(s) in a profile, e.g. `set critic anthropic/claude-sonnet-5-5`."""
+    root, cfg = _project(project)
+    prof = teammod.set_role_models(load_profile(name or cfg.profile, root), role, models, root)
+    saved = _save_where_it_lives(prof, root)
+    chain = ", ".join(prof.roles[role])
+    console.print(f"[green]{escape(role)}[/green] → {escape(chain)}; {escape(saved)}")
+
+
+@profile_app.command("unset")
+@_friendly
+def profile_unset(
+    role: str = typer.Argument(...),
+    name: str | None = typer.Option(None, "--profile", "-p", help="default: the project's"),
+    project: Path | None = PROJECT,
+):
+    """Let a role use its profile slot's models again."""
+    root, cfg = _project(project)
+    prof = load_profile(name or cfg.profile, root)
+    if role not in prof.roles:
+        raise ConfigError(f"{role} has no models of its own in profile {prof.name}")
+    prof = teammod.set_role_models(prof, role, None, root)
+    console.print(f"{escape(role)} uses its slot again; {escape(_save_where_it_lives(prof, root))}")
 
 
 @command

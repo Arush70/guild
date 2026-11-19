@@ -140,3 +140,15 @@ wheel) and served from `/vendor`, so the dashboard works offline; without it the
 back to plain text areas. Saving goes through the same write rules as the agents' tools and
 is refused while a job runs or when the file changed on disk since it was opened.
 
+## ADR-023 A model per role, in any profile; the team stays per project (accepted 2026-11-19)
+Owners want to choose the model for each role, not only for the four slots, and to choose
+which roles take part. A profile may now carry `roles: {role: [models…]}`; a role found there
+uses those models (looked up as the slot `role:<name>`, so router, cost cap, doctor and
+fallback need no special case), every other role uses its slot. Escalation still uses the
+profile's escalation slot. Who is on the team stays in the project's `roles_enabled`, so it
+holds whichever profile is picked; the engineer cannot be removed, roles without a task part
+(researcher, kaggle, assistant, pair) cannot be added. Profiles are found in the project, then
+in `~/.codeguild/profiles/` (the owner's, for every project), then built in. Editing a built-in
+profile copies it into the project first; codeguild's own files are never changed. Rules live
+in `team.py`, shared by the CLI and the dashboard.
+

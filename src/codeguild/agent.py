@@ -144,7 +144,11 @@ class Agent:
         self.ctx = ctx
         self.trace = trace
         self.escalate = escalate and role.escalation_slot is not None
-        self.slot = role.escalation_slot if self.escalate else role.slot
+        # a role with its own models in the profile uses them; escalation still goes to the
+        # profile's stronger slot
+        self.slot = (
+            role.escalation_slot if self.escalate else router.profile.slot_for(role.name, role.slot)
+        )
         self.on_token = on_token
         # tool budget for one run(); a profile can raise/lower it (limits.max_tool_calls_per_task)
         self.max_tool_calls = role.max_tool_calls if max_tool_calls is None else max_tool_calls

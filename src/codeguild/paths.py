@@ -109,6 +109,11 @@ class ProjectPaths:
         """Per-user list of projects the dashboard has opened."""
         return Path.home() / GUILD_DIR / "recent.json"
 
+    @staticmethod
+    def user_overrides(kind: str) -> Path:
+        """Per-user profiles or roles, for every project: ~/.codeguild/profiles/."""
+        return Path.home() / GUILD_DIR / kind
+
 
 def adopt_legacy_project(root: Path) -> bool:
     """A project set up by a version that was still called "guild" keeps its plan, config and

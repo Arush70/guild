@@ -64,13 +64,14 @@ src/codeguild/
                       ui/vendor/monaco  monaco-editor's min/vs, unchanged (do not edit; do not lint)
   data/roles/*.yaml   lead engineer critic security docs researcher performance ux data-quality
                       kaggle assistant(chat, prose); a role with `review:` is a reviewer
+  team.py             who is on the team (roles_enabled) and a model per role (Profile.roles)
   bench.py            `codeguild bench`: the calculator demo N times from scratch + hidden checks
   data/templates/*.md PRD/ARCHITECTURE/RULES/TASKS/MEMORY/DECISIONS scaffolds for `codeguild init --docs`
   data/profiles/*.yaml free lite pro (codeguild init writes a machine-specific override into .codeguild/profiles/)
 vscode-extension/     VS Code front end (ADR-014): extension.js + lib/{client,server,format}.js +
                       media/ (chat webview). No deps, no build. `npm test` (needs `codeguild` installed),
                       `npm run package` → .vsix. Talks only to the dashboard HTTP API.
-tests/                397 tests; FakeProvider in conftest.py scripts model replies, no API calls;
+tests/                420 tests; FakeProvider in conftest.py scripts model replies, no API calls;
                       test_robustness.py (schemas/repair/streaming), test_hardware.py (init wizard),
                       test_hardening*.py (2026-11-12 break-it audit: every test is an attack that worked),
                       test_pair.py (approval gate, modes, cancel, /api/pair, `codeguild pair`),

@@ -4,10 +4,23 @@ Current state of the project. Update at the end of every working session.
 
 ## Current status (2026-10-02)
 
-v0.3.0 (renamed to codeguild). 397 tests with scripted fake models (193 at the time of this entry); `ruff check` + `ruff format --check` clean (rule set
+v0.3.0 (renamed to codeguild). 420 tests with scripted fake models (193 at the time of this entry); `ruff check` + `ruff format --check` clean (rule set
 pinned). TASK-001 has one accepted free-profile real-model run; TASK-002 guards are in. A full
 code audit on 2026-10-02 fixed 14 defects (see CHANGELOG "Unreleased") — none of it is confirmed
 on a real model run yet; that re-run is the next step.
+
+## 2026-11-19: a model per role, own profiles, team screen
+
+- Owner asked for a custom profile where anyone picks the model for each role and adds or
+  removes roles, on all profiles. ADR-023. `Profile.roles` (per-role chains), the per-user
+  profile folder `~/.codeguild/profiles/`, `team.py` (rules shared by CLI and dashboard),
+  `codeguild team` / `codeguild profile …`, dashboard **Team and models** tab (`/api/team`).
+- Also fixed after the 2026-11-18 push: merging failed without a git identity (all four CI
+  jobs red, run #23); `python -m codeguild` added because pip's Scripts folder is not on the
+  owner's PATH.
+- The owner's computer bridge often cannot start its shell; files are then written straight
+  into the folder (after comparing with GitHub) and the owner commits. `.github/` cannot be
+  written that way: such files go to the top folder and the owner moves them.
 
 ## 2026-11-18: bench, nightly real-model job, configurable reviewers
 

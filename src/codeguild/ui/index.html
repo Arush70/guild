@@ -176,15 +176,13 @@
     </section>
 
     <section id="view-setup" class="hidden">
-      <h2>Models and settings</h2>
+      <h2>Team and settings</h2>
       <div class="scroll">
-        <div class="row" style="margin-bottom:8px"><button id="btnDoctor">Check models</button></div>
-        <div class="small dim" style="margin-bottom:12px">Shows which models of this profile can run right now.</div>
+        <p class="small dim" style="margin-top:0">Choose who takes part in each task and which model plays each role.</p>
+        <div class="row" style="margin-bottom:14px"><button class="primary" id="btnTeam">Team and models</button><button id="btnDoctor">Check models</button></div>
         <label class="small dim">Test command<input id="cfgTest" style="width:100%;margin-bottom:8px" class="code"></label>
         <label class="small dim">Where commands run
           <select id="cfgSandbox" style="width:100%;margin-bottom:8px"><option value="local">on this computer</option><option value="docker">in a Docker container</option></select></label>
-        <div class="small dim">Roles that take part in a task</div>
-        <div id="cfgRoles" class="small" style="margin:4px 0 8px"></div>
         <button id="btnSaveCfg">Save settings</button>
       </div>
     </section>
@@ -588,16 +586,93 @@ function renderSetup() {
   const c = state.config;
   if (document.activeElement !== $('#cfgTest')) $('#cfgTest').value = c.test_command || '';
   $('#cfgSandbox').value = c.sandbox || 'local';
-  const box = $('#cfgRoles'); if (box.dataset.for === ROLES.join()) return;
-  box.dataset.for = ROLES.join(); box.replaceChildren();
-  const team = ['engineer', 'verifier', 'critic', 'security', 'performance', 'ux', 'data-quality', 'lead', 'docs'];
-  for (const r of team.filter(r => ROLES.includes(r) || (c.roles_enabled || []).includes(r))) {
-    const l = el('label'); l.style.display = 'block'; const cb = el('input'); cb.type = 'checkbox'; cb.value = r; cb.checked = (c.roles_enabled || []).includes(r);
-    l.append(cb, ' ' + r); box.append(l);
-  }
+}
+
+/* ---------------------------------------------------------------- team and models */
+const WHERE = {project: 'this project', user: 'your profiles (all projects)', 'built-in': 'built-in'};
+function openTeam(profile) {
+  closeTab('team', true);
+  openTab('team', 'Team and models', async pane => {
+    const d = await api('/api/team' + (profile ? '?profile=' + encodeURIComponent(profile) : ''));
+    const doc = el('div', 'doc wide'), form = el('div'); form.style.maxWidth = '1000px';
+    // which profile is being edited
+    const head = el('div', 'row'); head.style.marginBottom = '6px';
+    const pick = el('select'); pick.setAttribute('aria-label', 'Profile to edit');
+    for (const p of d.profiles) pick.append(new Option(`${p.name} (${WHERE[p.where] || p.where})`, p.name));
+    pick.value = d.profile;
+    pick.addEventListener('change', () => openTeam(pick.value));
+    head.append(el('b', '', 'Profile'), pick, el('span', 'small dim', d.profile === d.in_use ? 'in use by this project' : `this project uses ${d.in_use}`));
+    form.append(head);
+    form.append(el('p', 'small dim', d.where === 'built-in'
+      ? 'This is a built-in profile: saving copies it into this project first, the built-in one stays as it is.'
+      : d.where === 'user' ? 'One of your own profiles: changes apply in every project that uses it.' : 'This project\'s own copy of the profile.'));
+    // model suggestions for every input
+    const list = el('datalist'); list.id = 'modelSuggestions';
+    for (const m of d.suggestions) list.append(new Option(m));
+    form.append(list);
+    if (!d.ollama) form.append(el('p', 'small warnc', 'Ollama is not running, so models you have downloaded are not suggested. Start Ollama to see them.'));
+
+    const table = el('table'); table.style.width = '100%';
+    const hrow = el('tr'); hrow.append(el('th', '', 'On team'), el('th', '', 'Role'), el('th', '', 'What it does'), el('th', '', 'Model(s), tried in this order — comma between them'));
+    table.append(hrow);
+    const inputs = {}, boxes = {};
+    let section = null;
+    for (const r of d.roles) {
+      const kind = r.on_team === null ? 'demand' : 'team';
+      if (kind !== section) {
+        section = kind;
+        const tr = el('tr'), td = el('td', 'dim small', kind === 'team' ? 'Takes part in every task' : 'Used on demand (chat, pair mode, ask)');
+        td.colSpan = 4; td.style.paddingTop = '14px'; tr.append(td); table.append(tr);
+      }
+      const tr = el('tr'), on = el('td'), name = el('td', 'code'), part = el('td', 'small'), models = el('td');
+      models.style.width = '46%'; part.style.maxWidth = '34ch';
+      if (r.on_team !== null) {
+        const cb = el('input'); cb.type = 'checkbox'; cb.checked = r.on_team; cb.disabled = r.required;
+        cb.setAttribute('aria-label', `${r.name} on the team`);
+        cb.title = r.required ? 'Always on: it writes the code' : ''; boxes[r.name] = cb; on.append(cb);
+      }
+      name.textContent = r.name; name.title = r.title;
+      part.textContent = r.part;
+      if (r.uses_models) {
+        const inp = el('input'); inp.setAttribute('list', 'modelSuggestions'); inp.className = 'code'; inp.style.width = '100%';
+        inp.setAttribute('aria-label', `Models for ${r.name}`);
+        inp.value = r.own_models ? r.models.join(', ') : '';
+        const fallback = (d.slots[r.slot] || []).join(', ');
+        inp.placeholder = fallback ? `profile default (${r.slot}): ${fallback}` : `the profile has no ${r.slot} models: name one here`;
+        inputs[r.name] = {inp, was: inp.value};
+        models.append(inp);
+      } else models.append(el('span', 'dim small', 'not a model'));
+      tr.append(on, name, part, models); table.append(tr);
+    }
+    form.append(table);
+    form.append(el('p', 'small dim', 'Leave a model box empty to use the profile default. A model is written as provider/name: ollama/qwen2.5-coder:7b, anthropic/claude-sonnet-5-5, openai/…, gemini/…, groq/…, deepseek/…, openrouter/…. Hosted models need their API key; codeguild never calls one without a known price when the profile has a spending cap.'));
+
+    const collect = () => {
+      const body = {profile: d.profile, roles_enabled: Object.entries(boxes).filter(([, cb]) => cb.checked).map(([n]) => n)};
+      const changed = {};
+      for (const [n, {inp, was}] of Object.entries(inputs)) if (inp.value.trim() !== was.trim()) changed[n] = inp.value.split(',').map(s => s.trim()).filter(Boolean);
+      if (Object.keys(changed).length) body.models = changed;
+      return body;
+    };
+    const note = el('span', 'small');
+    const actions = el('div', 'row'); actions.style.marginTop = '12px';
+    actions.append(btn('Save', async () => {
+      await api('/api/team', collect()); note.textContent = ''; logLine('ok', `team and models saved (profile ${d.profile})`); await refresh(); openTeam(d.profile);
+    }, 'primary'));
+    const newName = el('input'); newName.placeholder = 'name for a new profile'; newName.setAttribute('aria-label', 'Name for a new profile');
+    const scope = el('select'); scope.setAttribute('aria-label', 'Where to keep it');
+    scope.append(new Option('for this project', 'project'), new Option('for all my projects', 'user'));
+    actions.append(el('span', 'dim small', 'or'), newName, scope, btn('Save as new profile', async () => {
+      const name = newName.value.trim().toLowerCase();
+      if (!name) { newName.focus(); return; }
+      await api('/api/team', {...collect(), save_as: name, scope: scope.value}); logLine('ok', `profile ${name} created and in use`); await refresh(); openTeam(name);
+    }), note);
+    form.append(actions);
+    doc.append(form); pane.append(doc);
+  });
 }
 $('#btnSaveCfg').addEventListener('click', act(async () => {
-  await api('/api/config', {test_command: $('#cfgTest').value, sandbox: $('#cfgSandbox').value, roles_enabled: $$('#cfgRoles input:checked').map(i => i.value)});
+  await api('/api/config', {test_command: $('#cfgTest').value, sandbox: $('#cfgSandbox').value});
   logLine('ok', 'settings saved'); refresh();
 }));
 
@@ -711,6 +786,7 @@ $('#btnRevise').addEventListener('click', act(async () => {
   await api('/api/plan/revise', {instruction, profile: $('#profile').value}); $('#reviseQ').value = ''; showBottom('activity');
 }));
 $('#btnDoctor').addEventListener('click', doctor);
+$('#btnTeam').addEventListener('click', () => openTeam());
 $('#filter').addEventListener('input', renderTree);
 
 /* ---------------------------------------------------------------- events from the server */

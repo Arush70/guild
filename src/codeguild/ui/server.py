@@ -18,7 +18,7 @@ import time
 import traceback
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -29,6 +29,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .. import team as teammod
 from ..config import (
     ConfigError,
     ProjectConfig,
@@ -37,6 +38,7 @@ from ..config import (
     load_project_config,
     load_role,
     save_project_config,
+    where_defined,
 )
 from ..errors import Cancelled
 from ..hardware import detect_test_command
@@ -250,6 +252,18 @@ class FileReq(BaseModel):
 
 class ProjectReq(BaseModel):
     path: str
+
+
+class TeamReq(BaseModel):
+    """Change the team and the models. Every field is optional; all of it is checked before
+    anything is written."""
+
+    roles_enabled: list[str] | None = None  # exactly who is on the team
+    profile: str | None = None  # the profile to edit (default: the project's)
+    models: dict[str, list[str]] | None = None  # role → models in order; [] = the slot's again
+    save_as: str | None = None  # save the result as a new profile with this name
+    scope: str = "project"  # for save_as: "project" or "user" (all the owner's projects)
+    use: bool = True  # switch the project to the edited / new profile
 
 
 class ConfigReq(BaseModel):
@@ -711,6 +725,50 @@ def create_app(root: Path, allowed_hosts: set[str] | None = None) -> FastAPI:
             raise HTTPException(400, str(e)) from e
         save_project_config(S.root, cfg)
         return cfg.model_dump()
+
+    def _team_view(profile: str | None) -> dict:
+        cfg = S.config()
+        prof = load_profile(profile or cfg.profile, S.root)
+        pulled = ollama_models()
+        return {
+            "profile": prof.name,
+            "in_use": cfg.profile,
+            "where": where_defined("profiles", prof.name, S.root),
+            "profiles": [
+                {"name": n, "where": where_defined("profiles", n, S.root)}
+                for n in list_available("profiles", S.root)
+            ],
+            "slots": prof.slots,
+            "roles": [
+                {**asdict(r), "uses_models": r.uses_models}
+                for r in teammod.roles(S.root, cfg, prof)
+            ],
+            "suggestions": teammod.model_suggestions(S.root, pulled),
+            "ollama": pulled is not None,
+        }
+
+    @app.get("/api/team")
+    def team(profile: str | None = None):
+        return _team_view(profile)
+
+    @app.post("/api/team")
+    def set_team(req: TeamReq):
+        _not_while_running()
+        cfg = S.config()
+        if req.roles_enabled is not None:
+            cfg = teammod.set_team(cfg, S.root, req.roles_enabled)
+        prof = load_profile(req.profile or cfg.profile, S.root)
+        for role, models in (req.models or {}).items():
+            prof = teammod.set_role_models(prof, role, models, S.root)
+        if req.save_as:
+            teammod.save_new(prof, req.save_as, req.scope, S.root)
+            prof = load_profile(req.save_as, S.root)
+        elif req.models:
+            teammod.save_edited(prof, S.root)
+        if req.use or req.save_as:
+            cfg.profile = prof.name
+        save_project_config(S.root, cfg)
+        return _team_view(prof.name)
 
     @app.post("/api/plan")
     def plan(req: PlanReq):

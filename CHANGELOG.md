@@ -178,4 +178,12 @@
 - Fix: merging a task's branch failed on a machine with no git name/email configured (a
   fresh git install, or a CI runner). Merges now fall back to the `codeguild` identity, as
   task commits already did.
+- **Your own team and models.** Any profile can give any role its own model or fallback list
+  (`roles:` in the profile, next to `slots:`); roles without one keep using their slot. Your own
+  profiles can be kept for one project or for all your projects (`~/.codeguild/profiles/`).
+  Who is on the team (roles_enabled) is chosen per project from the roles available; the
+  engineer always stays. New dashboard screen **Team and models**, and commands
+  `codeguild team` and `codeguild profile new|set|unset|use|list|show`.
+- `python -m codeguild …` works like the `codeguild` command, for when pip's Scripts folder is
+  not on PATH.
 

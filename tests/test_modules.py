@@ -290,6 +290,11 @@ def test_merging_works_on_a_machine_without_a_git_identity(repo: Repo, monkeypat
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     for var in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
         monkeypatch.delenv(var, raising=False)
+    # git may guess a name and email from the computer (Windows usually can); forbid that, so
+    # this is "no identity" on every machine
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.useConfigOnly")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
     merged = repo.merge_branch("codeguild/t1-x", base)
     assert merged["ok"], merged
     assert (root / "new.py").exists()

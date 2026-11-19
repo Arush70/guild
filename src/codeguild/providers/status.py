@@ -68,6 +68,6 @@ def _status(model: str, pulled: list[str] | None) -> tuple[str, str]:
 def profile_status(profile: Profile, pulled: list[str] | None) -> list[ModelStatus]:
     return [
         ModelStatus(slot, model, *_status(model, pulled))
-        for slot, chain in profile.slots.items()
+        for slot, chain in profile.all_chains().items()
         for model in chain
     ]

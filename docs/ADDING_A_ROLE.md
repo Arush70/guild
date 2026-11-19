@@ -35,4 +35,6 @@ Rules of thumb:
   format (`verdict`, `findings`, `summary`) and repaired if needed. `codeguild review` runs all
   enabled reviewers on the current diff. Without `review:`, use the role with
   `codeguild ask <name> "..."`.
+- **Pick its model.** A new role uses the profile slot it names. To give it models of its own:
+  `codeguild profile set <name> ollama/…`, or the dashboard's Team and models screen.
 - **Test it** with `FakeProvider` in `tests/` — no API calls in tests.

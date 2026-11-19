@@ -30,7 +30,9 @@ _NO_IDENTITY_HINT = (
     "git has no user.name/user.email; committed as 'codeguild'. Set them with: "
     'git config --global user.name "You" && git config --global user.email "you@example.com"'
 )
-_NO_IDENTITY_RX = re.compile(r"tell me who you are|auto-detect email|empty ident")
+_NO_IDENTITY_RX = re.compile(
+    r"tell me who you are|auto-detect email|empty ident|auto-detection is disabled"
+)
 _NEW_FILE_BYTES = 20_000
 
 
