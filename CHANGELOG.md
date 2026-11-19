@@ -184,6 +184,8 @@
   Who is on the team (roles_enabled) is chosen per project from the roles available; the
   engineer always stays. New dashboard screen **Team and models**, and commands
   `codeguild team` and `codeguild profile new|set|unset|use|list|show`.
+- Fix (Windows): a command whose output went to a pipe or a file (`codeguild --help | more`,
+  `> log.txt`) could end with UnicodeEncodeError on characters like →; they print as ? there now.
 - `python -m codeguild …` works like the `codeguild` command, for when pip's Scripts folder is
   not on PATH.
 

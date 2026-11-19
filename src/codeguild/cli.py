@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import shutil
@@ -1216,3 +1217,16 @@ def ui(
 
 if __name__ == "__main__":
     app()
+
+
+def main() -> None:
+    """The `codeguild` command and `python -m codeguild`.
+
+    On Windows, output that goes to a pipe or a file uses the old code page (cp1252), which
+    has no "→" or "✔": printing one ended the command with UnicodeEncodeError. Such characters
+    are shown as "?" there instead; a UTF-8 terminal is not affected.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, ValueError):
+            stream.reconfigure(errors="replace")
+    app(prog_name="codeguild")

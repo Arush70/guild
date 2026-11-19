@@ -3,6 +3,7 @@ interface: plan, repo, verify, paths, projectdocs, provider status, workspace.""
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -286,6 +287,18 @@ def test_merging_works_on_a_machine_without_a_git_identity(repo: Repo, monkeypat
     _git(root, "checkout", "-q", base)
     for key in ("user.name", "user.email"):
         subprocess.run(["git", "config", "--unset", key], cwd=root)
+    # hiding the global config also hides core.autocrlf (set on Windows): keep its value, or
+    # every file looks changed and the merge rightly refuses a dirty tree
+    autocrlf = (
+        _git(root, "config", "--get", "core.autocrlf").strip()
+        if subprocess.run(
+            ["git", "config", "--get", "core.autocrlf"], cwd=root, capture_output=True
+        ).returncode
+        == 0
+        else ""
+    )
+    if autocrlf:
+        _git(root, "config", "core.autocrlf", autocrlf)
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "no-global-config"))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     for var in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
@@ -304,7 +317,14 @@ def test_merging_works_on_a_machine_without_a_git_identity(repo: Repo, monkeypat
 def test_python_dash_m_codeguild_runs_the_cli():
     import sys
 
+    # cp1252: what Windows uses when the output goes to a pipe or a file
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
     res = subprocess.run(
-        [sys.executable, "-m", "codeguild", "--help"], capture_output=True, text=True, timeout=60
+        [sys.executable, "-m", "codeguild", "--help"],
+        capture_output=True,
+        timeout=60,
+        env=env,
     )
-    assert res.returncode == 0 and "bench" in res.stdout and "codeguild" in res.stdout
+    out = res.stdout.decode("cp1252", errors="replace")
+    assert res.returncode == 0, res.stderr.decode("cp1252", errors="replace")[-500:]
+    assert "bench" in out and "codeguild" in out
