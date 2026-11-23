@@ -164,6 +164,9 @@
   pull requests.
 
 ## Unreleased (after 0.3.0)
+- Nightly real-model bench publishes each report to the public `bench-results` branch
+  (`LATEST.md`, `INDEX.md`, `runs/<date>-run<N>/`), so results can be read without signing in.
+  `scripts/ship.ps1` installs, tests, and only on a full pass commits and pushes.
 - `codeguild bench`: the Phase 1 check as one command. Builds the calculator demo in a fresh
   folder N times; the lead plans, every task is implemented, reviewed and merged, then hidden
   checks the agents never saw test the result. Writes `report.md` and `report.json` with time,

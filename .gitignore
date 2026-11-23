@@ -11,6 +11,8 @@ venv/
 
 # codeguild's own working data — never belongs in THIS repo (run codeguild from a project folder, not here)
 .codeguild/
+# files Claude leaves for scripts/ship.ps1 to move into place
+_incoming/
 
 # OS / editor / notebook clutter
 .DS_Store

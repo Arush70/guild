@@ -1,7 +1,8 @@
 name: real-models
 # The team on a real local model (Ollama on the runner's CPU), every night and on demand.
 # It measures, it does not gate: a failed run is a finding to read in the report, not a red
-# build. The report and the traces are kept as an artifact of the run.
+# build. Each report is also published to the public branch `bench-results` (LATEST.md, and
+# runs/<date>-<run>/ with report.json and the traces), readable without signing in.
 on:
   schedule:
     - cron: "17 2 * * *"
@@ -18,7 +19,7 @@ on:
         default: "false"
 
 permissions:
-  contents: read
+  contents: write  # only to publish the report to the bench-results branch
 
 jobs:
   bench:
@@ -64,6 +65,27 @@ jobs:
         run: |
           if [ -f bench/report.md ]; then cat bench/report.md >> "$GITHUB_STEP_SUMMARY"; \
           else echo "no report: see the bench step's log" >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Publish the report on the bench-results branch
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN: ${{ github.run_number }}
+        run: |
+          [ -f bench/report.md ] || { echo "no report to publish"; exit 0; }
+          url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if ! git clone -q --depth 1 --branch bench-results "$url" results 2>/dev/null; then
+            mkdir results && git -C results init -q -b bench-results && git -C results remote add origin "$url"
+          fi
+          dest="runs/$(date -u +%Y-%m-%d)-run${RUN}"
+          mkdir -p "results/$dest"
+          cp bench/report.md bench/report.json "results/$dest/"
+          tar czf "results/$dest/traces.tar.gz" bench/run-*/.codeguild/runs 2>/dev/null || true
+          { echo "Model: \`${MODEL}\` · run ${RUN} · $(date -u '+%Y-%m-%d %H:%M UTC')"; echo; cat bench/report.md; } > results/LATEST.md
+          echo "- $(date -u +%Y-%m-%d) run ${RUN}, ${MODEL}: $(head -1 bench/report.md | sed 's/^# //') ([report]($dest/report.md))" >> results/INDEX.md
+          cd results
+          git add -A
+          git -c user.name="Arush70" -c user.email="ytfinex70@gmail.com" commit -q -m "bench: run ${RUN}, ${MODEL}"
+          git push -q origin bench-results
       - uses: actions/upload-artifact@v4
         if: always()
         with:
