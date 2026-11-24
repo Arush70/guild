@@ -1,0 +1,51 @@
+[
+  {
+    "index": 1,
+    "folder": "/home/runner/work/guild/guild/bench/run-1",
+    "passed": false,
+    "tasks": [
+      {
+        "id": "T1",
+        "title": "Add multiply(a: int, b: int) -> int to app.py returning a*b",
+        "accepted": false,
+        "merged": false,
+        "rounds": 1,
+        "usd": 0.0,
+        "why_not": "engineer produced no file changes (after push-back)"
+      },
+      {
+        "id": "T2",
+        "title": "Add subtract(a: int, b: int) -> int to app.py returning a-b",
+        "accepted": false,
+        "merged": false,
+        "rounds": 0,
+        "usd": 0.0,
+        "why_not": "not reached"
+      },
+      {
+        "id": "T3",
+        "title": "Add divide(a: int, b: int) -> int to app.py returning a/b",
+        "accepted": false,
+        "merged": false,
+        "rounds": 0,
+        "usd": 0.0,
+        "why_not": "not reached"
+      }
+    ],
+    "tests_pass_after_merge": true,
+    "acceptance": {
+      "add": true,
+      "subtract": false,
+      "multiply": false,
+      "divide": false,
+      "divide by zero": false
+    },
+    "wall_s": 171.4,
+    "calls": 7,
+    "input_tokens": 10973,
+    "output_tokens": 1371,
+    "usd": 0.0,
+    "trace": "/home/runner/work/guild/guild/bench/run-1/.codeguild/runs/20261124-122714-e3dddf/trace.jsonl",
+    "error": ""
+  }
+]
