@@ -1,0 +1,51 @@
+[
+  {
+    "index": 1,
+    "folder": "/home/runner/work/guild/guild/bench/run-1",
+    "passed": false,
+    "tasks": [
+      {
+        "id": "T1",
+        "title": "Add multiply(a: int, b: int) -> int to app.py returning a*b",
+        "accepted": false,
+        "merged": false,
+        "rounds": 2,
+        "usd": 0.0,
+        "why_not": "tests: test_app.py; EXISTING TESTS REMOVED (you must keep all pre-existing code and tests): bench/run-1/test_app.py::test_add"
+      },
+      {
+        "id": "T2",
+        "title": "Add subtract(a: int, b: int) -> int to app.py returning a-b",
+        "accepted": false,
+        "merged": false,
+        "rounds": 0,
+        "usd": 0.0,
+        "why_not": "not reached"
+      },
+      {
+        "id": "T3",
+        "title": "Add divide(a: int, b: int) -> int to app.py returning a/b",
+        "accepted": false,
+        "merged": false,
+        "rounds": 0,
+        "usd": 0.0,
+        "why_not": "not reached"
+      }
+    ],
+    "tests_pass_after_merge": true,
+    "acceptance": {
+      "add": true,
+      "subtract": false,
+      "multiply": false,
+      "divide": false,
+      "divide by zero": false
+    },
+    "wall_s": 976.9,
+    "calls": 16,
+    "input_tokens": 38105,
+    "output_tokens": 3385,
+    "usd": 0.0,
+    "trace": "/home/runner/work/guild/guild/bench/run-1/.codeguild/runs/20261125-111511-a91cae/trace.jsonl",
+    "error": ""
+  }
+]
