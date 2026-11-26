@@ -1,4 +1,4 @@
-Model: `qwen2.5-coder:3b` · run 7 · 2026-11-25 11:31 UTC
+Model: `qwen2.5-coder:3b` · run 8 · 2026-11-26 11:24 UTC
 
 # codeguild bench: 0/1 runs passed
 
@@ -6,14 +6,14 @@ Profile `ci`: frontier = ollama/qwen2.5-coder:3b, coder = ollama/qwen2.5-coder:3
 
 | run | result | tasks accepted | tests after merge | hidden checks | time | calls | tokens in/out | cost |
 |---|---|---|---|---|---|---|---|---|
-| 1 | FAIL | 0/3 | pass | 1/5 | 16.3 min | 16 | 38,105/3,385 | $0.0000 |
+| 1 | FAIL | 0/3 | pass | 1/5 | 33.3 min | 25 | 81,152/6,986 | $0.0000 |
 
 ## What went wrong
 
-- run 1, T1 Add multiply(a: int, b: int) -> int to app.py returning a*b (2 rounds): tests: test_app.py; EXISTING TESTS REMOVED (you must keep all pre-existing code and tests): bench/run-1/test_app.py::test_add
-- run 1, T2 Add subtract(a: int, b: int) -> int to app.py returning a-b (0 rounds): not reached
-- run 1, T3 Add divide(a: int, b: int) -> int to app.py returning a/b (0 rounds): not reached
+- run 1, T1 Add multiply function (1 rounds): Failed to implement multiply function
+- run 1, T2 Add subtract function (0 rounds): not reached
+- run 1, T3 Add divide function (0 rounds): not reached
 
 Traces (send these with the report):
 
-- run 1: `/home/runner/work/guild/guild/bench/run-1/.codeguild/runs/20261125-111511-a91cae/trace.jsonl`
+- run 1: `/home/runner/work/guild/guild/bench/run-1/.codeguild/runs/20261126-105112-014eed/trace.jsonl`

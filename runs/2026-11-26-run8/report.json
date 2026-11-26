@@ -1,0 +1,51 @@
+[
+  {
+    "index": 1,
+    "folder": "/home/runner/work/guild/guild/bench/run-1",
+    "passed": false,
+    "tasks": [
+      {
+        "id": "T1",
+        "title": "Add multiply function",
+        "accepted": false,
+        "merged": false,
+        "rounds": 1,
+        "usd": 0.0,
+        "why_not": "Failed to implement multiply function"
+      },
+      {
+        "id": "T2",
+        "title": "Add subtract function",
+        "accepted": false,
+        "merged": false,
+        "rounds": 0,
+        "usd": 0.0,
+        "why_not": "not reached"
+      },
+      {
+        "id": "T3",
+        "title": "Add divide function",
+        "accepted": false,
+        "merged": false,
+        "rounds": 0,
+        "usd": 0.0,
+        "why_not": "not reached"
+      }
+    ],
+    "tests_pass_after_merge": true,
+    "acceptance": {
+      "add": true,
+      "subtract": false,
+      "multiply": false,
+      "divide": false,
+      "divide by zero": false
+    },
+    "wall_s": 1997.6,
+    "calls": 25,
+    "input_tokens": 81152,
+    "output_tokens": 6986,
+    "usd": 0.0,
+    "trace": "/home/runner/work/guild/guild/bench/run-1/.codeguild/runs/20261126-105112-014eed/trace.jsonl",
+    "error": ""
+  }
+]
