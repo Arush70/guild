@@ -1,0 +1,33 @@
+[
+  {
+    "index": 1,
+    "folder": "/home/runner/work/guild/guild/bench/run-1",
+    "passed": true,
+    "tasks": [
+      {
+        "id": "T1",
+        "title": "Add multiply(a: int, b: int) -> int to app.py returning a*b; add test_multiply in test_app.py covering 2*3 and 0*5.",
+        "accepted": true,
+        "merged": true,
+        "rounds": 2,
+        "usd": 0.0,
+        "why_not": ""
+      }
+    ],
+    "tests_pass_after_merge": true,
+    "acceptance": {
+      "add": true,
+      "subtract": true,
+      "multiply": true,
+      "divide": true,
+      "divide by zero": true
+    },
+    "wall_s": 1533.1,
+    "calls": 17,
+    "input_tokens": 29642,
+    "output_tokens": 2589,
+    "usd": 0.0,
+    "trace": "/home/runner/work/guild/guild/bench/run-1/.codeguild/runs/20261128-102122-2e42da/trace.jsonl",
+    "error": ""
+  }
+]
